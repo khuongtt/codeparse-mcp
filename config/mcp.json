@@ -1,0 +1,25 @@
+{
+  "servers": {
+    "codeparse": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/node_modules/.bin/codeparse-mcp/src/mcp/server.js"],
+      "env": {},
+      "description": "Java/Xtend code graph parser for ISO 26262 ASIL-D unit test generation"
+    },
+    "codeparse-docker": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "${workspaceFolder}:/project:ro",
+        "-v", "codeparse-data:/data",
+        "-e", "CODEPARSE_PROJECT_ROOT=/project",
+        "-e", "CODEPARSE_DB_PATH=/data/graph.db",
+        "codeparse-mcp:latest",
+        "serve"
+      ],
+      "description": "codeparse-mcp via Docker (recommended for CI/CD)"
+    }
+  }
+}

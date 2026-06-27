@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "codeparse": {
+      "command": "node",
+      "args": ["/path/to/codeparse-mcp/src/mcp/server.js"],
+      "env": {}
+    },
+    "codeparse-docker": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "/your/project/root:/project:ro",
+        "-v", "codeparse-data:/data",
+        "-e", "CODEPARSE_PROJECT_ROOT=/project",
+        "-e", "CODEPARSE_DB_PATH=/data/graph.db",
+        "codeparse-mcp:latest",
+        "serve"
+      ]
+    }
+  }
+}

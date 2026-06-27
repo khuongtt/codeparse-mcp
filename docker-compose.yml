@@ -1,0 +1,45 @@
+version: '3.8'
+
+# ============================================================
+# codeparse-mcp Docker Compose
+# Usage:
+#   docker compose run --rm codeparse init
+#   docker compose run --rm codeparse sync
+#   docker compose run --rm codeparse status
+#   docker compose up mcp-server   # Start MCP server daemon
+# ============================================================
+
+services:
+
+  # ── One-shot CLI commands ──────────────────────────────────────────────────
+  codeparse:
+    build: .
+    image: codeparse-mcp:latest
+    volumes:
+      - ${PROJECT_ROOT:-.}:/project:ro      # Mount your source code (read-only)
+      - codeparse-data:/data                # Persistent graph DB
+    environment:
+      CODEPARSE_PROJECT_ROOT: /project
+      CODEPARSE_DB_PATH: /data/graph.db
+    # Override CMD at run time:
+    # docker compose run --rm codeparse sync --force
+
+  # ── MCP Server (stdio via docker exec / pipe) ──────────────────────────────
+  # For GitHub Copilot / Claude Desktop MCP integration
+  mcp-server:
+    build: .
+    image: codeparse-mcp:latest
+    command: serve
+    volumes:
+      - ${PROJECT_ROOT:-.}:/project:ro
+      - codeparse-data:/data
+    environment:
+      CODEPARSE_PROJECT_ROOT: /project
+      CODEPARSE_DB_PATH: /data/graph.db
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
+
+volumes:
+  codeparse-data:
+    driver: local

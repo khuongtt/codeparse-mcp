@@ -1,0 +1,7 @@
+node_modules/
+.codeparse/
+*.db
+*.db-wal
+*.db-shm
+.env
+dist/
