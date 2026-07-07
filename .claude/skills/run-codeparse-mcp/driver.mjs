@@ -140,7 +140,10 @@ export async function fullPipeline(projectRoot) {
   console.log('▶️  MCP: search_classes...');
   const searchResult = await mcpQuery(projectRoot, 'search_classes', { pattern: '' });
   const classes = (() => {
-    try { return JSON.parse(searchResult?.result?.content?.[0]?.text || '[]'); }
+    try {
+      const parsed = JSON.parse(searchResult?.result?.content?.[0]?.text || '{}');
+      return parsed.results || [];
+    }
     catch { return []; }
   })();
   console.log(`   ✅ found ${classes.length} class(es)\n`);

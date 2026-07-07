@@ -75,6 +75,24 @@ function firstToken(node) {
 
 function lineOf(node) { return firstToken(node)?.startLine ?? null; }
 
+// ── HTML entity decoder (inline to avoid cross-dependency during parsing) ──
+
+function decodeHtmlEntities(text) {
+  if (typeof text !== 'string') return text;
+  const map = {
+    '&amp;lt;': '&lt;', '&amp;gt;': '&gt;', '&amp;amp;': '&amp;', '&amp;quot;': '"',
+    '&lt;': '<', '&gt;': '>', '&amp;': '&', '&quot;': '"', '&#x27;': "'",
+  };
+  let prev, result = text;
+  do {
+    prev = result;
+    for (const [pat, val] of Object.entries(map)) {
+      result = result.replaceAll(pat, val);
+    }
+  } while (result !== prev);
+  return result;
+}
+
 function allTokenImages(node) {
   // Collect all leaf tokens sorted by startOffset for correct left-to-right order
   const toks = [];
@@ -85,7 +103,7 @@ function allTokenImages(node) {
   };
   collect(node);
   toks.sort((a, b) => (a.startOffset ?? 0) - (b.startOffset ?? 0));
-  return toks.map(t => t.image);
+  return toks.map(t => decodeHtmlEntities(t.image));
 }
 
 // ── JavaVisitor ───────────────────────────────────────────────────────────────

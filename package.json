@@ -1,6 +1,6 @@
 {
   "name": "codeparse-mcp",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Code Parser MCP Tool — Java/Xtend AST+CFG to Graph DB for ISO 26262 ASIL-D UT generation",
   "type": "module",
   "bin": {

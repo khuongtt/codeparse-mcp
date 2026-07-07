@@ -74,9 +74,21 @@ Environment variables for Docker: `CODEPARSE_PROJECT_ROOT`, `CODEPARSE_DB_PATH`.
 
 ## Important Files
 
-- `src/mcp/server.js` — MCP tool definitions and handlers
+- `src/mcp/server.js` — MCP tool definitions and handlers (15 tools)
+- `src/mcp/util.js` — Shared utilities: HTML entity decoder, source reader with path traversal protection, parse quality builder, recommended_next_actions generator
 - `src/graph/builder.js` — Parsing orchestration and persistence
 - `src/db/database.js` — DB wrapper, queries, schema application
 - `src/db/schema.sql` — SQLite schema (files, classes, methods, cfg_nodes, cfg_edges, call_edges, mcdc_conditions, etc.)
 - `src/parser/java-parser.js` — Java CST parser and CFG/MC/DC body analyzer
 - `src/parser/xtend-parser.js` — Xtend pattern-based parser, reuses MC/DC logic from java-parser
+
+## MCP Tools (v1.2.0)
+
+All method responses use clean `snake_case` field names (no camelCase duplicates like `throwsList`, `booleanConditions`).
+HTML entities (`&lt;`, `&gt;`, `&amp;`) are decoded in condition expressions. Every response includes `recommended_next_actions`.
+
+| Tool | Description |
+|---|---|
+| `get_method_context` | **New** — Get full source context for a method (source code, fields, calls, decisions). Path-traversal safe. |
+
+See the tool definitions in `src/mcp/server.js` for the full list with input schemas.

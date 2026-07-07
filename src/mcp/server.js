@@ -13,6 +13,16 @@ import { existsSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
 import { GraphDatabase } from '../db/database.js';
 import { GraphBuilder } from '../graph/builder.js';
+import {
+  decodeHtmlEntities,
+  decodeMcdcConditions,
+  readSourceRange,
+  buildParseQuality,
+  recommendedNextActions,
+  estimateTokens,
+  MAX_SOURCE_LINES_PER_METHOD,
+  MAX_CONTEXT_TOKENS,
+} from './util.js';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -36,7 +46,7 @@ const db = new GraphDatabase(config.dbPath);
 db.open();
 
 const server = new Server(
-  { name: 'codeparse-mcp', version: '1.0.0' },
+  { name: 'codeparse-mcp', version: '1.2.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -240,6 +250,24 @@ const TOOLS = [
       },
     },
   },
+
+  // ── Method context ──────────────────────────────────────────────────────
+
+  {
+    name: 'get_method_context',
+    description: 'Get full source context for a method: source code, fields read/written, calls, decisions, and parse quality. Use this instead of reading source files directly.',
+    inputSchema: {
+      type: 'object',
+      required: ['method_id'],
+      properties: {
+        method_id: { type: 'number', description: 'Method DB ID (from get_methods response)' },
+        include_source: { type: 'boolean', description: 'Include source code snippet', default: true },
+        include_fields: { type: 'boolean', description: 'Include class fields used by this method', default: true },
+        include_calls: { type: 'boolean', description: 'Include method calls from this method', default: true },
+        include_decisions: { type: 'boolean', description: 'Include decisions/conditions for MC/DC', default: true },
+      },
+    },
+  },
 ];
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
@@ -351,20 +379,38 @@ async function handleTool(name, args) {
     case 'get_class': {
       const cls = db.getClassByQualifiedName(args.qualifiedName);
       if (!cls) return { error: `Class not found: ${args.qualifiedName}` };
-      return cls;
+
+      const file = db.db.prepare('SELECT path, lang FROM files WHERE id = ?').get(cls.file_id);
+
+      return {
+        ...cls,
+        javadoc: decodeHtmlEntities(cls.javadoc),
+        file: file ? { path: file.path, language: file.lang } : null,
+        interfaces: cls.interfaces,
+        annotations: cls.annotations,
+        parse_quality: { status: 'ok', warnings: [] },
+        recommended_next_actions: recommendedNextActions('get_class', {
+          qualifiedName: cls.qualified_name,
+        }),
+      };
     }
 
     case 'search_classes': {
       const classes = db.searchClasses(args.pattern);
-      return classes.map(c => ({
-        id: c.id,
-        qualifiedName: c.qualified_name,
-        name: c.name,
-        kind: c.kind,
-        isAbstract: !!c.is_abstract,
-        asilLevel: c.asil_level,
-        lineStart: c.line_start,
-      }));
+      return {
+        results: classes.map(c => ({
+          id: c.id,
+          qualifiedName: c.qualified_name,
+          name: c.name,
+          kind: c.kind,
+          isAbstract: !!c.is_abstract,
+          asilLevel: c.asil_level,
+          lineStart: c.line_start,
+        })),
+        recommended_next_actions: classes.length > 0
+          ? [{ tool: 'get_class', input: { qualifiedName: classes[0].qualified_name }, reason: 'View full class details' }]
+          : [],
+      };
     }
 
     // ── Methods ────────────────────────────────────────────────────────────
@@ -372,39 +418,105 @@ async function handleTool(name, args) {
     case 'get_methods': {
       const cls = db.getClassByQualifiedName(args.qualifiedName);
       if (!cls) return { error: `Class not found: ${args.qualifiedName}` };
-      return db.getMethodsForClass(cls.id);
+      const methods = db.getMethodsForClass(cls.id);
+      return {
+        class: {
+          id: cls.id,
+          name: cls.name,
+          qualifiedName: cls.qualified_name,
+        },
+        methods: methods.map(m => ({
+          ...m,
+          javadoc: decodeHtmlEntities(m.javadoc),
+          boolean_conditions: (m.boolean_conditions || []).map(decodeHtmlEntities),
+          parse_quality: buildParseQuality(m),
+          recommended_next_actions: recommendedNextActions('get_methods', {
+            methodId: m.id,
+            qualifiedName: cls.qualified_name,
+          }),
+        })),
+      };
     }
 
     case 'search_methods': {
-      return db.searchMethods(args.pattern);
+      const results = db.searchMethods(args.pattern);
+      return {
+        results: results.map(m => ({
+          ...m,
+          boolean_conditions: (m.boolean_conditions || []).map(decodeHtmlEntities),
+        })),
+        recommended_next_actions: results.length > 0
+          ? [{ tool: 'get_method_context', input: { method_id: results[0].id }, reason: 'Get full context for this method' }]
+          : [],
+      };
     }
 
     // ── CFG ────────────────────────────────────────────────────────────────
 
     case 'get_cfg': {
-      return db.getCfgForMethod(args.methodId);
+      const cfg = db.getCfgForMethod(args.methodId);
+      const method = db.db.prepare(`
+        SELECT m.name, m.signature, f.path AS _file_path
+        FROM methods m
+        JOIN files f ON f.id = m.file_id
+        WHERE m.id = ?
+      `).get(args.methodId);
+      return {
+        method_id: args.methodId,
+        method_name: method?.name,
+        signature: method?.signature,
+        file: method ? { path: method._file_path } : null,
+        nodes: (cfg.nodes || []).map(n => ({
+          ...n,
+          condition: decodeHtmlEntities(n.condition),
+          label: decodeHtmlEntities(n.label),
+        })),
+        edges: cfg.edges,
+        recommended_next_actions: recommendedNextActions('get_cfg', {
+          methodId: args.methodId,
+        }),
+      };
     }
 
     // ── MC/DC ──────────────────────────────────────────────────────────────
 
     case 'get_mcdc': {
       const conditions = db.getMcdcForMethod(args.methodId);
-      const method = db.db.prepare('SELECT * FROM methods WHERE id = ?').get(args.methodId);
+      const method = db.db.prepare(`
+        SELECT m.*, f.path AS _file_path
+        FROM methods m
+        JOIN files f ON f.id = m.file_id
+        WHERE m.id = ?
+      `).get(args.methodId);
+
+      if (!method) return { error: `Method not found: ${args.methodId}` };
+
+      let bc = [];
+      try { bc = JSON.parse(method.boolean_conditions ?? '[]'); } catch (_) {}
+      bc = bc.map(decodeHtmlEntities);
+
+      const decodedConds = decodeMcdcConditions(conditions);
+
       return {
-        methodId: args.methodId,
-        methodName: method?.name,
-        signature: method?.signature,
-        branchCount: method?.branch_count,
-        conditionCount: method?.condition_count,
-        cyclomaticComplexity: method?.cyclomatic_complexity,
-        booleanConditions: method ? JSON.parse(method.boolean_conditions ?? '[]') : [],
-        mcdcConditions: conditions,
+        method_id: args.methodId,
+        method_name: method.name,
+        signature: method.signature,
+        branch_count: method.branch_count,
+        condition_count: method.condition_count,
+        cyclomatic_complexity: method.cyclomatic_complexity,
+        boolean_conditions: bc,
+        mcdc_conditions: decodedConds,
+        file: { path: method._file_path },
         coverage_requirements: {
-          C0_statement: 'Every statement must be executed',
-          C1_branch: `All ${method?.branch_count ?? 0} branches (true/false) must be covered`,
-          MCDC: `Each of ${conditions.length} boolean decisions must independently affect outcome`,
-          ASIL_D_target: '100% MC/DC required',
+          c0_statement: 'Every statement must be executed',
+          c1_branch: `All ${method.branch_count ?? 0} branches (true/false) must be covered`,
+          mcdc: `Each of ${conditions.length} boolean decisions must independently affect outcome`,
+          asil_d_target: '100% MC/DC required',
         },
+        parse_quality: buildParseQuality(method),
+        recommended_next_actions: recommendedNextActions('get_mcdc', {
+          methodId: method.id,
+        }),
       };
     }
 
@@ -417,33 +529,60 @@ async function handleTool(name, args) {
         const conditions = db.getMcdcForMethod(m.id);
         if (conditions.length > 0 || m.branch_count > 0) {
           result.push({
-            methodId: m.id,
-            methodName: m.name,
+            method_id: m.id,
+            method_name: m.name,
             signature: m.signature,
-            branchCount: m.branch_count,
-            conditionCount: m.condition_count,
-            cyclomaticComplexity: m.cyclomatic_complexity,
-            mcdcConditions: conditions,
+            branch_count: m.branch_count,
+            condition_count: m.condition_count,
+            cyclomatic_complexity: m.cyclomatic_complexity,
+            boolean_conditions: (m.boolean_conditions || []).map(decodeHtmlEntities),
+            mcdc_conditions: decodeMcdcConditions(conditions),
+            parse_quality: buildParseQuality(m),
           });
         }
       }
-      return { className: args.qualifiedName, methods: result };
+      return {
+        class_name: cls.name,
+        qualified_name: cls.qualified_name,
+        methods: result,
+        recommended_next_actions: recommendedNextActions('get_mcdc_for_class', {
+          qualifiedName: cls.qualified_name,
+        }),
+      };
     }
 
     // ── Call graph ─────────────────────────────────────────────────────────
 
     case 'get_callees': {
-      return db.getCallees(args.methodId);
+      const callees = db.getCallees(args.methodId);
+      return {
+        method_id: args.methodId,
+        callees: callees.map(c => ({
+          callee_name: c.callee_name,
+          callee_id: c.callee_id,
+          signature: c.signature,
+          qualified_name: c.qualified_name,
+          resolved: !!c.callee_id,
+        })),
+        recommended_next_actions: recommendedNextActions('get_callees', {
+          methodId: args.methodId,
+        }),
+      };
     }
 
     case 'get_callers': {
-      return db.db.prepare(`
+      const callers = db.db.prepare(`
         SELECT ce.*, m.signature, m.name as method_name, c.qualified_name as class_name
         FROM call_edges ce
         JOIN methods m ON m.id = ce.caller_id
         JOIN classes c ON c.id = m.class_id
         WHERE ce.callee_id = ?
       `).all(args.methodId);
+      return {
+        method_id: args.methodId,
+        callers,
+        recommended_next_actions: [],
+      };
     }
 
     // ── Full UT context ────────────────────────────────────────────────────
@@ -476,32 +615,51 @@ async function handleTool(name, args) {
           id: m.id,
           name: m.name,
           signature: m.signature,
-          returnType: m.return_type,
+          return_type: m.return_type,
           visibility: m.visibility,
-          isStatic: !!m.is_static,
-          isAbstract: !!m.is_abstract,
+          is_static: m.is_static,
+          is_abstract: m.is_abstract,
           annotations: m.annotations,
           parameters: m.parameters,
-          throwsList: m.throwsList,
-          javadoc: m.javadoc,
-          lineStart: m.line_start,
-          lineEnd: m.line_end,
-          asilLevel: m.asil_level,
-          cyclomaticComplexity: m.cyclomatic_complexity,
-          branchCount: m.branch_count,
-          conditionCount: m.condition_count,
-          booleanConditions: m.booleanConditions,
-          cfg: { nodeCount: cfg.nodes.length, edgeCount: cfg.edges.length, nodes: cfg.nodes, edges: cfg.edges },
-          mcdcConditions: mcdc,
-          mockTargets: callees.map(c => ({ calleeName: c.callee_name, line: c.line, resolved: !!c.callee_id })),
+          throws_list: m.throws_list,
+          javadoc: decodeHtmlEntities(m.javadoc),
+          line_start: m.line_start,
+          line_end: m.line_end,
+          asil_level: m.asil_level,
+          cyclomatic_complexity: m.cyclomatic_complexity,
+          branch_count: m.branch_count,
+          condition_count: m.condition_count,
+          boolean_conditions: (m.boolean_conditions || []).map(decodeHtmlEntities),
+          file: m.file,
+          cfg: {
+            node_count: cfg.nodes.length,
+            edge_count: cfg.edges.length,
+            nodes: (cfg.nodes || []).map(n => ({
+              ...n,
+              condition: decodeHtmlEntities(n.condition),
+              label: decodeHtmlEntities(n.label),
+            })),
+            edges: cfg.edges,
+          },
+          mcdc_conditions: decodeMcdcConditions(mcdc),
+          mock_targets: callees.map(c => ({
+            callee_name: c.callee_name,
+            line: c.line,
+            resolved: !!c.callee_id,
+          })),
           coverage_requirements: {
-            C0_statement: 'All statements executed',
-            C1_branch: `${m.branch_count} branches — true+false for each`,
-            MCDC: mcdc.length > 0
+            c0_statement: 'All statements executed',
+            c1_branch: `${m.branch_count} branches — true+false for each`,
+            mcdc: mcdc.length > 0
               ? `${mcdc.length} decisions, each with independence pairs`
               : 'No complex boolean decisions',
-            ASIL_D: 'ISO 26262 ASIL-D: 100% MC/DC mandatory',
+            asil_d: 'ISO 26262 ASIL-D: 100% MC/DC mandatory',
           },
+          parse_quality: buildParseQuality(m),
+          recommended_next_actions: recommendedNextActions('get_ut_context', {
+            methodId: m.id,
+            qualifiedName: cls.qualified_name,
+          }),
         });
       }
 
@@ -515,7 +673,7 @@ async function handleTool(name, args) {
           superclass: cls.superclass,
           interfaces: cls.interfaces,
           annotations: cls.annotations,
-          javadoc: cls.javadoc,
+          javadoc: decodeHtmlEntities(cls.javadoc),
           asilLevel: cls.asil_level,
           lineStart: cls.line_start,
         },
@@ -526,13 +684,15 @@ async function handleTool(name, args) {
         summary: {
           totalMethods: allMethods.length,
           totalBranches: allMethods.reduce((s, m) => s + (m.branch_count ?? 0), 0),
-          totalMcdcConditions: methodContexts.reduce((s, m) => s + m.mcdcConditions.length, 0),
+          totalMcdcConditions: methodContexts.reduce((s, m) => s + m.mcdc_conditions.length, 0),
           estimatedMinTestCases: methodContexts.reduce((s, m) => {
-            // Minimum: max(branches, mcdc_pairs) per method
-            const mcdcPairs = m.mcdcConditions.reduce((sum, c) => sum + (c.mcdcPairs?.length ?? 0), 0);
-            return s + Math.max(m.branchCount, mcdcPairs, 1);
+            const mcdcPairs = m.mcdc_conditions.reduce((sum, c) => sum + (c.mcdcPairs?.length ?? 0), 0);
+            return s + Math.max(m.branch_count, mcdcPairs, 1);
           }, 0),
         },
+        recommended_next_actions: recommendedNextActions('get_ut_context', {
+          qualifiedName: cls.qualified_name,
+        }),
       };
     }
 
@@ -558,6 +718,146 @@ async function handleTool(name, args) {
       if (!existsSync(absPath)) return { error: `File not found: ${args.filePath}` };
       const builder = new GraphBuilder(db, config.projectRoot);
       return builder.syncFile(absPath);
+    }
+
+    // ── Method context ─────────────────────────────────────────────────────
+
+    case 'get_method_context': {
+      const methodId = args.method_id;
+
+      const method = db.db.prepare(`
+        SELECT m.*,
+               c.name AS class_name,
+               c.qualified_name AS class_qualified_name,
+               f.path AS _file_path,
+               f.lang AS _file_lang
+        FROM methods m
+        JOIN classes c ON c.id = m.class_id
+        JOIN files f ON f.id = m.file_id
+        WHERE m.id = ?
+      `).get(methodId);
+
+      if (!method) return { error: `Method not found: ${methodId}` };
+
+      const annotations = JSON.parse(method.annotations ?? '[]');
+      const parameters = JSON.parse(method.parameters ?? '[]');
+      const throwsList = JSON.parse(method.throws_list ?? '[]');
+      const booleanConditions = JSON.parse(method.boolean_conditions ?? '[]');
+
+      const response = {
+        status: 'ok',
+        method: {
+          id: method.id,
+          class_id: method.class_id,
+          class_name: method.class_name,
+          class_qualified_name: method.class_qualified_name,
+          name: method.name,
+          signature: method.signature,
+          return_type: method.return_type,
+          visibility: method.visibility,
+          is_static: !!method.is_static,
+          is_abstract: !!method.is_abstract,
+          is_override: !!method.is_override,
+          annotations,
+          parameters,
+          throws_list: throwsList,
+          javadoc: decodeHtmlEntities(method.javadoc),
+          source_ref: {
+            file: { path: method._file_path, language: method._file_lang },
+            line_start: method.line_start,
+            line_end: method.line_end,
+          },
+        },
+        state: { fields_read: [], fields_written: [] },
+        calls: [],
+        decisions: [],
+        parse_quality: buildParseQuality(method),
+      };
+
+      // 1. Include source code
+      if (args.include_source !== false) {
+        const sourceResult = readSourceRange(
+          config.projectRoot,
+          method._file_path,
+          method.line_start,
+          method.line_end,
+          MAX_SOURCE_LINES_PER_METHOD
+        );
+        if (sourceResult.error) {
+          response.source_error = sourceResult.error;
+          if (sourceResult.pathTraversalRejected) {
+            response.status = 'error';
+            response.error = 'Path traversal detected: cannot read source file';
+          }
+        } else {
+          response.method.source = sourceResult.content;
+          response.method.source_ref.line_start = sourceResult.line_start;
+          response.method.source_ref.line_end = sourceResult.line_end;
+          response.method.source_truncated = sourceResult.truncated;
+          if (sourceResult.truncated) {
+            response.status = 'partial';
+            response.truncated = true;
+            response.truncation_reason = 'MAX_SOURCE_LINES_PER_METHOD_EXCEEDED';
+          }
+        }
+
+        // Check token budget
+        if (response.status === 'ok' || response.status === 'partial') {
+          const tokens = estimateTokens(response);
+          if (tokens > MAX_CONTEXT_TOKENS) {
+            // Remove expensive fields to fit budget
+            response.decisions = [];
+            response.status = 'partial';
+            response.truncated = true;
+            response.truncation_reason = 'TOKEN_BUDGET_EXCEEDED';
+          }
+        }
+      }
+
+      // 2. Include fields
+      if (args.include_fields !== false) {
+        const classFields = db.db.prepare(
+          'SELECT name, type, is_static, is_final FROM fields WHERE class_id = ? ORDER BY name'
+        ).all(method.class_id);
+        response.state.fields_read = classFields.map(f => ({
+          name: f.name,
+          type: f.type,
+          is_static: !!f.is_static,
+          is_final: !!f.is_final,
+        }));
+      }
+
+      // 3. Include calls from this method
+      if (args.include_calls !== false) {
+        const callees = db.getCallees(methodId);
+        response.calls = callees.map(c => ({
+          callee_name: c.callee_name,
+          callee_id: c.callee_id,
+          signature: c.signature,
+          line: c.line,
+          resolved: !!c.callee_id,
+        }));
+      }
+
+      // 4. Include decisions (MC/DC conditions)
+      if (args.include_decisions !== false) {
+        const mcdc = db.getMcdcForMethod(methodId);
+        response.decisions = decodeMcdcConditions(mcdc).map(c => ({
+          expression: c.expression,
+          sub_conditions: c.subConditions,
+          truth_table: c.truthTable,
+          mcdc_pairs: c.mcdcPairs,
+          line: c.line,
+        }));
+      }
+
+      // 5. Recommended next actions
+      response.recommended_next_actions = recommendedNextActions('get_method_context', {
+        methodId: method.id,
+        qualifiedName: method.class_qualified_name,
+      });
+
+      return response;
     }
 
     default:

@@ -262,14 +262,43 @@ export class GraphDatabase {
   }
 
   getMethodsForClass(classId) {
-    return this.db.prepare('SELECT * FROM methods WHERE class_id = ?').all(classId)
-      .map(m => ({
-        ...m,
-        annotations: JSON.parse(m.annotations ?? '[]'),
-        parameters: JSON.parse(m.parameters ?? '[]'),
-        throwsList: JSON.parse(m.throws_list ?? '[]'),
-        booleanConditions: JSON.parse(m.boolean_conditions ?? '[]'),
-      }));
+    const rows = this.db.prepare(`
+      SELECT m.*,
+             f.path AS _file_path,
+             f.lang AS _file_lang
+      FROM methods m
+      JOIN files f ON f.id = m.file_id
+      WHERE m.class_id = ?
+    `).all(classId);
+
+    return rows.map(m => ({
+      id: m.id,
+      class_id: m.class_id,
+      file_id: m.file_id,
+      name: m.name,
+      signature: m.signature,
+      return_type: m.return_type,
+      visibility: m.visibility,
+      is_static: !!m.is_static,
+      is_abstract: !!m.is_abstract,
+      is_override: !!m.is_override,
+      annotations: JSON.parse(m.annotations ?? '[]'),
+      parameters: JSON.parse(m.parameters ?? '[]'),
+      throws_list: JSON.parse(m.throws_list ?? '[]'),
+      javadoc: m.javadoc,
+      line_start: m.line_start,
+      line_end: m.line_end,
+      asil_level: m.asil_level,
+      cyclomatic_complexity: m.cyclomatic_complexity,
+      boolean_conditions: JSON.parse(m.boolean_conditions ?? '[]'),
+      branch_count: m.branch_count,
+      condition_count: m.condition_count,
+      file: {
+        id: m.file_id,
+        path: m._file_path,
+        language: m._file_lang,
+      },
+    }));
   }
 
   getCfgForMethod(methodId) {
@@ -305,9 +334,46 @@ export class GraphDatabase {
   }
 
   searchMethods(pattern) {
-    return this.db.prepare(
-      "SELECT m.*, c.qualified_name as class_qname FROM methods m JOIN classes c ON c.id = m.class_id WHERE m.name LIKE ? OR m.signature LIKE ? LIMIT 50"
-    ).all(`%${pattern}%`, `%${pattern}%`);
+    const rows = this.db.prepare(`
+      SELECT m.*,
+             c.qualified_name AS class_qname,
+             f.path AS _file_path,
+             f.lang AS _file_lang
+      FROM methods m
+      JOIN classes c ON c.id = m.class_id
+      JOIN files f ON f.id = m.file_id
+      WHERE m.name LIKE ? OR m.signature LIKE ?
+      LIMIT 50
+    `).all(`%${pattern}%`, `%${pattern}%`);
+
+    return rows.map(m => ({
+      id: m.id,
+      class_id: m.class_id,
+      file_id: m.file_id,
+      name: m.name,
+      signature: m.signature,
+      return_type: m.return_type,
+      visibility: m.visibility,
+      is_static: !!m.is_static,
+      is_abstract: !!m.is_abstract,
+      is_override: !!m.is_override,
+      annotations: JSON.parse(m.annotations ?? '[]'),
+      parameters: JSON.parse(m.parameters ?? '[]'),
+      throws_list: JSON.parse(m.throws_list ?? '[]'),
+      javadoc: m.javadoc,
+      line_start: m.line_start,
+      line_end: m.line_end,
+      cyclomatic_complexity: m.cyclomatic_complexity,
+      boolean_conditions: JSON.parse(m.boolean_conditions ?? '[]'),
+      branch_count: m.branch_count,
+      condition_count: m.condition_count,
+      class_qualified_name: m.class_qname,
+      file: {
+        id: m.file_id,
+        path: m._file_path,
+        language: m._file_lang,
+      },
+    }));
   }
 
   // ── Statistics ───────────────────────────────────────────
