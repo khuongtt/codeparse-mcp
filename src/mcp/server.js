@@ -13,6 +13,8 @@ import { existsSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
 import { GraphDatabase } from '../db/database.js';
 import { GraphBuilder } from '../graph/builder.js';
+import { importJunitResults, importJacocoCoverage } from '../import/index.js';
+import { generateEvidencePackage } from '../export/evidence-writer.js';
 import {
   decodeHtmlEntities,
   decodeMcdcConditions,
@@ -46,7 +48,7 @@ const db = new GraphDatabase(config.dbPath);
 db.open();
 
 const server = new Server(
-  { name: 'codeparse-mcp', version: '2.0.0' },
+  { name: 'codeparse-mcp', version: '2.5.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -280,6 +282,46 @@ const TOOLS = [
       },
     },
   },
+
+  // ── Evidence tools (v2.5.0) ──────────────────────────────────────────────
+
+  {
+    name: 'import_test_results',
+    description: 'Import JUnit XML test results and JaCoCo XML coverage data into the graph DB. Supports Surefire format JUnit XML and standard JaCoCo XML.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        junitPath: { type: 'string', description: 'Path to JUnit XML file or directory of TEST-*.xml files' },
+        jacocoPath: { type: 'string', description: 'Path to JaCoCo XML coverage report (jacoco.xml)' },
+      },
+    },
+  },
+
+  {
+    name: 'get_coverage_summary',
+    description: 'Get coverage summary for a class or method. Returns line/branch/instruction coverage percentages from imported JaCoCo data.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        qualifiedName: { type: 'string', description: 'Fully qualified class name' },
+        methodId: { type: 'number', description: 'Method DB ID (alternative to qualifiedName for single method)' },
+      },
+    },
+  },
+
+  {
+    name: 'export_evidence_plan',
+    description: 'Generate an ISO 26262 ASIL-D evidence package for a class. Returns the list of generated files. Writes to disk — does not return file contents.',
+    inputSchema: {
+      type: 'object',
+      required: ['qualifiedName', 'asilLevel'],
+      properties: {
+        qualifiedName: { type: 'string', description: 'Fully qualified class name' },
+        asilLevel: { type: 'string', description: 'ASIL level: A, B, C, D, or QM', default: 'D' },
+        outputDir: { type: 'string', description: 'Output directory (default: evidence/{className})' },
+      },
+    },
+  },
 ];
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
@@ -312,9 +354,14 @@ async function handleTool(name, args) {
       if (args.force) {
         // Drop and recreate
         db.db.exec(`
+          DROP TABLE IF EXISTS evidence_log;
+          DROP TABLE IF EXISTS coverage_records;
+          DROP TABLE IF EXISTS test_results;
+          DROP TABLE IF EXISTS test_cases;
+          DROP TABLE IF EXISTS mcdc_pairs;
+          DROP TABLE IF EXISTS mcdc_conditions;
           DROP TABLE IF EXISTS conditions;
           DROP TABLE IF EXISTS decisions;
-          DROP TABLE IF EXISTS mcdc_conditions;
           DROP TABLE IF EXISTS call_edges;
           DROP TABLE IF EXISTS cfg_edges;
           DROP TABLE IF EXISTS cfg_nodes;
@@ -966,6 +1013,60 @@ async function handleTool(name, args) {
       });
 
       return response;
+    }
+
+    // ── Import test results ───────────────────────────────────────────────
+
+    case 'import_test_results': {
+      const report = { testResults: 0, passed: 0, failed: 0, errors: 0, coverageRecords: 0 };
+      if (args.junitPath) {
+        const result = await importJunitResults(db, args.junitPath, config.projectRoot);
+        report.testResults = result.total;
+        report.passed = result.passed;
+        report.failed = result.failed;
+        report.errors = result.errors;
+      }
+      if (args.jacocoPath) {
+        const count = await importJacocoCoverage(db, args.jacocoPath);
+        report.coverageRecords = count;
+      }
+      return { status: 'ok', ...report };
+    }
+
+    // ── Get coverage summary ─────────────────────────────────────────────
+
+    case 'get_coverage_summary': {
+      if (args.methodId) {
+        const coverage = db.getCoverageForMethod(args.methodId);
+        return { status: 'ok', method_id: args.methodId, coverage };
+      }
+      if (args.qualifiedName) {
+        const cls = db.getClassByQualifiedName(args.qualifiedName);
+        if (!cls) return { error: `Class not found: ${args.qualifiedName}` };
+        const coverage = db.getCoverageForClass(cls.id);
+        return { status: 'ok', class: args.qualifiedName, coverage };
+      }
+      return { error: 'Provide either methodId or qualifiedName' };
+    }
+
+    // ── Export evidence plan ─────────────────────────────────────────────
+
+    case 'export_evidence_plan': {
+      const asilStr = (args.asilLevel || 'D').toUpperCase();
+      const asil = asilStr.startsWith('ASIL-') ? asilStr : `ASIL-${asilStr}`;
+      const cls = db.getClassByQualifiedName(args.qualifiedName);
+      if (!cls) return { error: `Class not found: ${args.qualifiedName}` };
+      const outputDir = args.outputDir || join(process.cwd(), 'evidence', cls.name);
+      const { files, summary } = await generateEvidencePackage(db, args.qualifiedName, asil, outputDir);
+      return {
+        status: 'ok',
+        class: args.qualifiedName,
+        asil_level: asil,
+        output_directory: outputDir,
+        files,
+        summary,
+        recommended_next_actions: [],
+      };
     }
 
     default:

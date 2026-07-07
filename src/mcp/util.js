@@ -202,6 +202,22 @@ export function recommendedNextActions(currentTool, context = {}) {
     });
   }
 
+  if (methodId && currentTool !== 'get_coverage_summary') {
+    actions.push({
+      tool: 'get_coverage_summary',
+      input: { methodId },
+      reason: 'View JaCoCo coverage data for this method',
+    });
+  }
+
+  if (qualifiedName && currentTool !== 'export_evidence_plan') {
+    actions.push({
+      tool: 'export_evidence_plan',
+      input: { qualifiedName, asilLevel: 'D' },
+      reason: 'Generate ISO 26262 evidence package for this class',
+    });
+  }
+
   if (qualifiedName && currentTool !== 'get_methods') {
     actions.push({
       tool: 'get_methods',

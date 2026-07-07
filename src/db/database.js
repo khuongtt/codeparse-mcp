@@ -54,6 +54,15 @@ export class GraphDatabase {
         });
         process.stderr.write('[codeparse-mcp] Schema migrated v1 → v2 (decisions/conditions)\n');
       }
+      // v2 → v3: add evidence tables
+      if (version < 3) {
+        this.transaction(() => {
+          // Re-apply full schema to pick up new tables (CREATE IF NOT EXISTS is idempotent)
+          this.db.exec(readFileSync(join(__dirname, 'schema.sql'), 'utf8'));
+          this.db.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run();
+        });
+        process.stderr.write('[codeparse-mcp] Schema migrated v2 → v3 (evidence tables)\n');
+      }
     } catch (_) {
       // Meta table may not exist yet on fresh schema — no migration needed
     }
@@ -305,6 +314,32 @@ export class GraphDatabase {
 
   // ── MC/DC conditions ─────────────────────────────────────
 
+  // ── MC/DC Pairs (normalized) ──────────────────────────────
+
+  insertMcdcPair(pair) {
+    return this.db.prepare(`
+      INSERT INTO mcdc_pairs
+        (decision_id, condition_id, pair_uid, test_vector_a_json, test_vector_b_json,
+         outcome_a, outcome_b, independence_status, review_status, reviewer, reviewed_at, notes)
+      VALUES
+        (@decisionId, @conditionId, @pairUid, @testVectorAJson, @testVectorBJson,
+         @outcomeA, @outcomeB, @independenceStatus, @reviewStatus, @reviewer, @reviewedAt, @notes)
+    `).run({
+      decisionId: pair.decisionId,
+      conditionId: pair.conditionId,
+      pairUid: pair.pairUid,
+      testVectorAJson: JSON.stringify(pair.testVectorA),
+      testVectorBJson: JSON.stringify(pair.testVectorB),
+      outcomeA: pair.outcomeA,
+      outcomeB: pair.outcomeB,
+      independenceStatus: pair.independenceStatus ?? "draft",
+      reviewStatus: pair.reviewStatus ?? "draft",
+      reviewer: pair.reviewer ?? null,
+      reviewedAt: pair.reviewedAt ?? null,
+      notes: pair.notes ?? null,
+    }).lastInsertRowid;
+  }
+
   insertMcdcCondition(cond) {
     return this.db.prepare(`
       INSERT INTO mcdc_conditions
@@ -321,6 +356,197 @@ export class GraphDatabase {
       mcdcPairs: cond.mcdcPairs ? JSON.stringify(cond.mcdcPairs) : null,
       line: cond.line ?? null,
     }).lastInsertRowid;
+  }
+
+  // ── MC/DC Pairs (normalized) ──────────────────────────────
+
+  insertMcdcPair(pair) {
+    return this.db.prepare(`
+      INSERT INTO mcdc_pairs
+        (decision_id, condition_id, pair_uid, test_vector_a_json, test_vector_b_json,
+         outcome_a, outcome_b, independence_status, review_status, reviewer, reviewed_at, notes)
+      VALUES
+        (@decisionId, @conditionId, @pairUid, @testVectorAJson, @testVectorBJson,
+         @outcomeA, @outcomeB, @independenceStatus, @reviewStatus, @reviewer, @reviewedAt, @notes)
+    `).run({
+      decisionId: pair.decisionId,
+      conditionId: pair.conditionId,
+      pairUid: pair.pairUid,
+      testVectorAJson: JSON.stringify(pair.testVectorA),
+      testVectorBJson: JSON.stringify(pair.testVectorB),
+      outcomeA: pair.outcomeA,
+      outcomeB: pair.outcomeB,
+      independenceStatus: pair.independenceStatus ?? 'draft',
+      reviewStatus: pair.reviewStatus ?? 'draft',
+      reviewer: pair.reviewer ?? null,
+      reviewedAt: pair.reviewedAt ?? null,
+      notes: pair.notes ?? null,
+    }).lastInsertRowid;
+  }
+
+  getMcdcPairsForDecision(decisionId) {
+    const rows = this.db.prepare(
+      'SELECT * FROM mcdc_pairs WHERE decision_id = ? ORDER BY id'
+    ).all(decisionId);
+    return rows.map(r => ({
+      ...r,
+      testVectorA: JSON.parse(r.test_vector_a_json),
+      testVectorB: JSON.parse(r.test_vector_b_json),
+    }));
+  }
+
+  getMcdcPairsForMethod(methodId) {
+    return this.db.prepare(`
+      SELECT p.*
+      FROM mcdc_pairs p
+      JOIN decisions d ON d.id = p.decision_id
+      WHERE d.method_id = ?
+      ORDER BY p.decision_id, p.id
+    `).all(methodId).map(r => ({
+      ...r,
+      testVectorA: JSON.parse(r.test_vector_a_json),
+      testVectorB: JSON.parse(r.test_vector_b_json),
+    }));
+  }
+
+  // ── Test Cases / Results ─────────────────────────────────
+
+  upsertTestCase(testCase) {
+    const existing = this.db.prepare(
+      "SELECT id FROM test_cases WHERE test_class = ? AND test_method = ?"
+    ).get(testCase.testClass, testCase.testMethod);
+    if (existing) {
+      this.db.prepare(`
+        UPDATE test_cases SET target_class_id=?, target_method_id=?, objective=?, status=?
+        WHERE id=?
+      `).run(
+        testCase.targetClassId ?? null,
+        testCase.targetMethodId ?? null,
+        testCase.objective ?? null,
+        testCase.status ?? 'draft',
+        existing.id
+      );
+      return existing.id;
+    }
+    return this.db.prepare(`
+      INSERT INTO test_cases (test_class, test_method, target_class_id, target_method_id, objective, status)
+      VALUES (@testClass, @testMethod, @targetClassId, @targetMethodId, @objective, @status)
+    `).run({
+      testClass: testCase.testClass,
+      testMethod: testCase.testMethod,
+      targetClassId: testCase.targetClassId ?? null,
+      targetMethodId: testCase.targetMethodId ?? null,
+      objective: testCase.objective ?? null,
+      status: testCase.status ?? 'draft',
+    }).lastInsertRowid;
+  }
+
+  insertTestResult(result) {
+    return this.db.prepare(`
+      INSERT INTO test_results (test_case_id, test_class, test_method, result, duration_ms, report_file, failure_message, stack_trace)
+      VALUES (@testCaseId, @testClass, @testMethod, @result, @durationMs, @reportFile, @failureMessage, @stackTrace)
+    `).run({
+      testCaseId: result.testCaseId ?? null,
+      testClass: result.testClass,
+      testMethod: result.testMethod,
+      result: result.result,
+      durationMs: result.durationMs ?? null,
+      reportFile: result.reportFile ?? null,
+      failureMessage: result.failureMessage ?? null,
+      stackTrace: result.stackTrace ?? null,
+    }).lastInsertRowid;
+  }
+
+  getTestResultsForMethod(methodId) {
+    return this.db.prepare(`
+      SELECT tr.* FROM test_results tr
+      JOIN test_cases tc ON tc.id = tr.test_case_id
+      WHERE tc.target_method_id = ?
+      ORDER BY tr.executed_at DESC
+    `).all(methodId);
+  }
+
+  getTestResultsForClass(classId) {
+    return this.db.prepare(`
+      SELECT tr.* FROM test_results tr
+      JOIN test_cases tc ON tc.id = tr.test_case_id
+      WHERE tc.target_class_id = ?
+      ORDER BY tr.executed_at DESC
+    `).all(classId);
+  }
+
+  // ── Coverage Records ─────────────────────────────────────
+
+  upsertCoverageRecord(record) {
+    const existing = this.db.prepare(
+      "SELECT id FROM coverage_records WHERE method_id = ? AND source = ?"
+    ).get(record.methodId, record.source ?? 'jacoco');
+    if (existing) {
+      this.db.prepare(`
+        UPDATE coverage_records SET
+          line_coverage=?, branch_coverage=?, instruction_coverage=?,
+          complexity_coverage=?, missed_lines=?, covered_lines=?,
+          missed_branches=?, covered_branches=?, imported_at=datetime('now')
+        WHERE id=?
+      `).run(
+        record.lineCoverage, record.branchCoverage, record.instructionCoverage,
+        record.complexityCoverage, record.missedLines, record.coveredLines,
+        record.missedBranches, record.coveredBranches, existing.id
+      );
+      return existing.id;
+    }
+    return this.db.prepare(`
+      INSERT INTO coverage_records
+        (file_id, method_id, class_name, method_name,
+         line_coverage, branch_coverage, instruction_coverage, complexity_coverage,
+         missed_lines, covered_lines, missed_branches, covered_branches, source)
+      VALUES
+        (@fileId, @methodId, @className, @methodName,
+         @lineCoverage, @branchCoverage, @instructionCoverage, @complexityCoverage,
+         @missedLines, @coveredLines, @missedBranches, @coveredBranches, @source)
+    `).run({
+      fileId: record.fileId ?? null,
+      methodId: record.methodId ?? null,
+      className: record.className,
+      methodName: record.methodName ?? null,
+      lineCoverage: record.lineCoverage ?? 0,
+      branchCoverage: record.branchCoverage ?? 0,
+      instructionCoverage: record.instructionCoverage ?? 0,
+      complexityCoverage: record.complexityCoverage ?? 0,
+      missedLines: record.missedLines ?? 0,
+      coveredLines: record.coveredLines ?? 0,
+      missedBranches: record.missedBranches ?? 0,
+      coveredBranches: record.coveredBranches ?? 0,
+      source: record.source ?? 'jacoco',
+    }).lastInsertRowid;
+  }
+
+  getCoverageForMethod(methodId) {
+    return this.db.prepare(
+      'SELECT * FROM coverage_records WHERE method_id = ? ORDER BY imported_at DESC LIMIT 1'
+    ).get(methodId);
+  }
+
+  getCoverageForClass(classId) {
+    return this.db.prepare(`
+      SELECT cr.*
+      FROM coverage_records cr
+      JOIN methods m ON m.id = cr.method_id
+      WHERE m.class_id = ?
+      ORDER BY cr.class_name, cr.method_name
+    `).all(classId);
+  }
+
+  // ── Evidence Log ─────────────────────────────────────────
+
+  insertEvidenceLog(entry) {
+    return this.db.prepare(`
+      INSERT INTO evidence_log (target_class, asil_level, output_path, files_generated, status)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      entry.targetClass, entry.asilLevel, entry.outputPath,
+      entry.filesGenerated ?? 0, entry.status ?? 'generated'
+    ).lastInsertRowid;
   }
 
   // ── Dependencies ─────────────────────────────────────────
@@ -472,6 +698,11 @@ export class GraphDatabase {
       mcdc: s('SELECT COUNT(*) as n FROM mcdc_conditions'),
       errors: s('SELECT COUNT(*) as n FROM parse_errors'),
       call_edges: s('SELECT COUNT(*) as n FROM call_edges'),
+      mcdc_pairs: s('SELECT COUNT(*) as n FROM mcdc_pairs'),
+      test_cases: s('SELECT COUNT(*) as n FROM test_cases'),
+      test_results: s('SELECT COUNT(*) as n FROM test_results'),
+      coverage_records: s('SELECT COUNT(*) as n FROM coverage_records'),
+      evidence_log: s('SELECT COUNT(*) as n FROM evidence_log'),
     };
   }
 

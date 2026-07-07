@@ -1,7 +1,7 @@
 {
   "name": "codeparse-mcp",
-  "version": "2.0.0",
-  "description": "Code Parser MCP Tool — Java/Xtend AST+CFG to Graph DB for ISO 26262 ASIL-D UT generation",
+  "version": "2.5.0",
+  "description": "Code Parser MCP Tool — Java/Xtend AST+CFG to Graph DB for ISO 26262 ASIL-D UT generation with evidence export",
   "type": "module",
   "bin": {
     "codeparse": "./src/cli/index.js"
@@ -19,6 +19,8 @@
     "chokidar": "^3.6.0",
     "commander": "^12.1.0",
     "crypto": "^1.0.1",
+    "exceljs": "^4.4.0",
+    "fast-xml-parser": "^5.9.3",
     "glob": "^11.0.0",
     "java-parser": "^2.3.0"
   },

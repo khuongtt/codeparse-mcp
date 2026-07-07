@@ -23,6 +23,8 @@ node src/cli/index.js init --root /path/to/project   # Initialize DB
 node src/cli/index.js sync --root /path/to/project   # Parse & sync files
 node src/cli/index.js status                         # Show DB stats
 node src/cli/index.js sync-file path/to/File.java    # Sync single file
+node src/cli/index.js import-results --junit <path>   # Import JUnit/JaCoCo results
+node src/cli/index.js evidence --asil D --class <qname> --output <dir>  # Generate evidence package
 ```
 
 No linter is configured.
@@ -74,16 +76,20 @@ Environment variables for Docker: `CODEPARSE_PROJECT_ROOT`, `CODEPARSE_DB_PATH`.
 
 ## Important Files
 
-- `src/mcp/server.js` — MCP tool definitions and handlers (15 tools)
+- `src/mcp/server.js` — MCP tool definitions and handlers (17 tools)
 - `src/mcp/util.js` — Shared utilities: HTML entity decoder, source reader with path traversal protection, parse quality builder, recommended_next_actions generator
 - `src/graph/builder.js` — Parsing orchestration and persistence
 - `src/db/database.js` — DB wrapper, queries, schema application
-- `src/db/schema.sql` — SQLite schema (files, classes, methods, cfg_nodes, cfg_edges, call_edges, mcdc_conditions, etc.)
+- `src/db/schema.sql` — SQLite schema (files, classes, methods, cfg_nodes, cfg_edges, call_edges, mcdc_conditions, decisions, conditions, mcdc_pairs, test_cases, test_results, coverage_records, evidence_log, etc.)
 - `src/parser/java-parser.js` — Java CST parser and CFG/MC/DC body analyzer
 - `src/parser/xtend-parser.js` — Xtend pattern-based parser, reuses MC/DC logic from java-parser
 - `src/parser/decision-utils.js` — Shared decision/condition decomposition logic (createDecision, decomposeBoolean)
+- `src/import/junit-importer.js` — JUnit Surefire XML parser (v2.5)
+- `src/import/jacoco-importer.js` — JaCoCo XML coverage parser (v2.5)
+- `src/export/evidence-excel.js` — xlsx workbook builders for evidence package (v2.5)
+- `src/export/evidence-writer.js` — Evidence package orchestrator (v2.5)
 
-## MCP Tools (v2.0.0)
+## MCP Tools (v2.5.0)
 
 All method responses use clean `snake_case` field names.
 HTML entities (`&lt;`, `&gt;`, `&amp;`) are decoded in condition expressions.
@@ -92,7 +98,10 @@ Decisions (branch points) use UID format `D-{methodId}-{seq}`, conditions use `C
 
 | Tool | Description |
 |---|---|
-| `get_decisions` | **New** — Get all decisions for a method with decomposed atomic conditions. Decision-UID scoped. Required for MC/DC planning. |
+| `get_decisions` | Get all decisions for a method with decomposed atomic conditions. Decision-UID scoped. Required for MC/DC planning. |
 | `get_method_context` | Full source context: source code, fields, calls, decisions (UID-scoped), parse quality. |
+| `import_test_results` | **New v2.5** — Import JUnit XML test results and JaCoCo XML coverage data. |
+| `get_coverage_summary` | **New v2.5** — Query JaCoCo line/branch coverage per class or method. |
+| `export_evidence_plan` | **New v2.5** — Generate 10-file ISO 26262 evidence package (decision list, MC/DC matrix, test mapping, traceability, audit summary, etc.). |
 
-See the tool definitions in `src/mcp/server.js` for the full list with input schemas.
+See the tool definitions in `src/mcp/server.js` for the full list with input schemas (17 tools total).

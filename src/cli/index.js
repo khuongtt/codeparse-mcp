@@ -8,13 +8,15 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import chalk from 'chalk';
 import { GraphDatabase } from '../db/database.js';
 import { GraphBuilder } from '../graph/builder.js';
+import { importJunitResults, importJacocoCoverage } from '../import/index.js';
+import { generateEvidencePackage } from '../export/evidence-writer.js';
 
 const program = new Command();
 
 program
   .name('codeparse')
   .description('Code Parser → Graph DB → MCP Knowledge Base for ISO 26262 ASIL-D UT Generation')
-  .version('1.0.0');
+  .version('2.5.0');
 
 // ── Shared config ─────────────────────────────────────────────────────────────
 
@@ -50,7 +52,7 @@ program
     const root = resolve(opts.root);
     const dbPath = opts.db ? resolve(opts.db) : join(root, '.codeparse', 'graph.db');
 
-    console.log(chalk.cyan('\n  codeparse-mcp  ') + chalk.gray('v1.0.0'));
+    console.log(chalk.cyan('\n  codeparse-mcp  ') + chalk.gray('v2.5.0'));
     console.log(chalk.bold('\n🔧 Initializing graph database...\n'));
     console.log(chalk.gray(`  Project root : ${root}`));
     console.log(chalk.gray(`  Database     : ${dbPath}`));
@@ -60,9 +62,14 @@ program
     if (opts.force) {
       console.log(chalk.yellow('\n  ⚠  Force flag set — dropping all tables...'));
       db.db.exec(`
+        DROP TABLE IF EXISTS evidence_log;
+        DROP TABLE IF EXISTS coverage_records;
+        DROP TABLE IF EXISTS test_results;
+        DROP TABLE IF EXISTS test_cases;
+        DROP TABLE IF EXISTS mcdc_pairs;
+        DROP TABLE IF EXISTS mcdc_conditions;
         DROP TABLE IF EXISTS conditions;
         DROP TABLE IF EXISTS decisions;
-        DROP TABLE IF EXISTS mcdc_conditions;
         DROP TABLE IF EXISTS call_edges;
         DROP TABLE IF EXISTS cfg_edges;
         DROP TABLE IF EXISTS cfg_nodes;
@@ -219,7 +226,7 @@ program
 
     console.log(chalk.bold('\n  🔌 MCP Integration'));
     console.log(`     Server command : ${chalk.white('node src/mcp/server.js')}`);
-    console.log(`     Tools exposed  : ${chalk.white('14 tools')}`);
+    console.log(`     Tools exposed  : ${chalk.white('17 tools')}`);
     console.log(`     Protocol       : ${chalk.gray('MCP stdio (compatible with GitHub Copilot)')}`);
     console.log();
 
@@ -258,6 +265,109 @@ program
       console.log(chalk.green(`  ✅ Synced: ${result.relPath}`));
       console.log(chalk.gray(`     Classes: ${result.classCount}, Methods: ${result.methodCount}, Errors: ${result.errorCount}`));
     }
+  });
+
+// ── import-results ────────────────────────────────────────────────────────────
+
+program
+  .command('import-results')
+  .description('Import JUnit test results and JaCoCo coverage data')
+  .requiredOption('--junit <path>', 'Path to JUnit XML report file or directory of Surefire reports')
+  .option('--jacoco <path>', 'Path to JaCoCo XML coverage report')
+  .option('-r, --root <path>', 'Project root directory')
+  .action(async (opts) => {
+    const config = loadConfig(opts.root);
+
+    if (!existsSync(config.dbPath)) {
+      console.error(chalk.red('\n  ❌ Database not found. Run: codeparse init\n'));
+      process.exit(1);
+    }
+
+    const db = openDb(config);
+
+    console.log(chalk.cyan('\n  codeparse-mcp  ') + chalk.gray('import-results'));
+
+    let testCount = 0, passedCount = 0, failedCount = 0, errorCount = 0;
+    let coverageCount = 0;
+
+    if (opts.junit) {
+      const results = await importJunitResults(db, opts.junit, config.projectRoot);
+      testCount = results.total;
+      passedCount = results.passed;
+      failedCount = results.failed;
+      errorCount = results.errors;
+      console.log(chalk.bold('\n  🧪 JUnit Results\n'));
+      console.log(`  ${chalk.white('Imported  :')} ${chalk.green(testCount)}`);
+      console.log(`  ${chalk.white('Passed    :')} ${chalk.green(passedCount)}`);
+      console.log(`  ${chalk.white('Failed    :')} ${failedCount > 0 ? chalk.red(failedCount) : chalk.green(failedCount)}`);
+      if (errorCount > 0) console.log(`  ${chalk.white('Errors    :')} ${chalk.red(errorCount)}`);
+    }
+
+    if (opts.jacoco) {
+      const count = await importJacocoCoverage(db, opts.jacoco);
+      coverageCount = count;
+      console.log(chalk.bold('\n  📊 Coverage Results\n'));
+      console.log(`  ${chalk.white('Records   :')} ${chalk.green(coverageCount)}`);
+    }
+
+    console.log(chalk.green('\n  ✅ Import complete.\n'));
+    db.close();
+  });
+
+// ── evidence ─────────────────────────────────────────────────────────────────
+
+program
+  .command('evidence')
+  .description('Generate ISO 26262 evidence package for a class')
+  .requiredOption('--asil <level>', 'ASIL safety level (A, B, C, D, or QM)')
+  .requiredOption('--class <qname>', 'Fully qualified class name')
+  .requiredOption('--output <path>', 'Output directory for evidence package')
+  .option('-r, --root <path>', 'Project root directory')
+  .action(async (opts) => {
+    const config = loadConfig(opts.root);
+
+    if (!existsSync(config.dbPath)) {
+      console.error(chalk.red('\n  ❌ Database not found. Run: codeparse init\n'));
+      process.exit(1);
+    }
+
+    const db = openDb(config);
+    const asilLevel = `ASIL-${opts.asil.toUpperCase()}`;
+    const outputPath = resolve(opts.output);
+
+    console.log(chalk.cyan('\n  codeparse-mcp  ') + chalk.gray('evidence'));
+    console.log(chalk.bold('\n  Generating ISO 26262 Evidence Package...\n'));
+    console.log(`  ${chalk.white('Target class :')} ${opts['class']}`);
+    console.log(`  ${chalk.white('ASIL level   :')} ${chalk.yellow(asilLevel)}`);
+    console.log(`  ${chalk.white('Output dir   :')} ${outputPath}`);
+
+    try {
+      const { files, summary } = await generateEvidencePackage(db, opts['class'], asilLevel, outputPath);
+
+      console.log(chalk.bold('\n  📦 Generated Files\n'));
+      for (const f of files) {
+        const icon = f.status === 'ok' ? chalk.green('✓') : chalk.yellow('⚠');
+        console.log(`  ${icon} ${f.file}  ${chalk.gray(f.status)}`);
+      }
+
+      console.log(chalk.bold('\n  📊 Summary\n'));
+      console.log(`  ${chalk.white('Methods     :')} ${chalk.cyan(summary.methods)}`);
+      console.log(`  ${chalk.white('Decisions   :')} ${chalk.cyan(summary.decisions)}`);
+      console.log(`  ${chalk.white('MC/DC Pairs :')} ${chalk.cyan(summary.mcdcPairs)}`);
+      console.log(`  ${chalk.white('Test Cases  :')} ${chalk.cyan(summary.testCases)}`);
+      console.log(`  ${chalk.white('Coverage    :')} ${chalk.cyan(summary.coverageRecords)}`);
+
+      if (!summary.allOk) {
+        console.log(chalk.yellow('\n  ⚠  Some files had errors.'));
+      }
+
+      console.log(chalk.green('\n  ✅ Evidence package generated.\n'));
+    } catch (err) {
+      console.error(chalk.red(`\n  ❌ Error: ${err.message}\n`));
+      process.exit(1);
+    }
+
+    db.close();
   });
 
 // ── serve ─────────────────────────────────────────────────────────────────────

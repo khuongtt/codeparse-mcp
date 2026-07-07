@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO meta VALUES ('schema_version', '2');
+INSERT OR IGNORE INTO meta VALUES ('schema_version', '3');
 INSERT OR IGNORE INTO meta VALUES ('created_at', datetime('now'));
 
 -- ---- FILES ----
@@ -174,6 +174,85 @@ CREATE TABLE IF NOT EXISTS mcdc_conditions (
   line          INTEGER
 );
 
+-- ---- MCDC PAIRS (normalized) ----
+-- Per-condition MC/DC independence pairs with review status.
+-- Each pair shows two test vectors that differ only on this condition
+-- and produce opposite outcomes, proving condition independence.
+CREATE TABLE IF NOT EXISTS mcdc_pairs (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id         INTEGER NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
+  condition_id        INTEGER NOT NULL REFERENCES conditions(id) ON DELETE CASCADE,
+  pair_uid            TEXT    NOT NULL,                        -- P-{decisionId}-{condPos}-{seq}
+  test_vector_a_json  TEXT    NOT NULL,                        -- JSON: {C1:true, C2:false, ...}
+  test_vector_b_json  TEXT    NOT NULL,                        -- differing vector
+  outcome_a           INTEGER NOT NULL,                        -- 0 or 1
+  outcome_b           INTEGER NOT NULL,                        -- 0 or 1 (must be opposite)
+  independence_status TEXT    NOT NULL DEFAULT 'draft',         -- draft|verified|failed
+  review_status       TEXT    NOT NULL DEFAULT 'draft',         -- draft|pending_review|approved|rejected
+  reviewer            TEXT,
+  reviewed_at         TEXT,
+  notes               TEXT
+);
+
+-- ---- TEST CASES ----
+-- Maps test methods to target methods for traceability
+CREATE TABLE IF NOT EXISTS test_cases (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  test_class       TEXT    NOT NULL,                            -- fully qualified test class name
+  test_method      TEXT    NOT NULL,                            -- test method name
+  target_class_id  INTEGER REFERENCES classes(id) ON DELETE SET NULL,
+  target_method_id INTEGER REFERENCES methods(id) ON DELETE SET NULL,
+  objective        TEXT,                                        -- what this test verifies
+  status           TEXT    NOT NULL DEFAULT 'draft'             -- draft|written|executed|passed|failed
+);
+
+-- ---- TEST RESULTS ----
+-- JUnit execution results imported from Surefire XML
+CREATE TABLE IF NOT EXISTS test_results (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  test_case_id    INTEGER REFERENCES test_cases(id) ON DELETE CASCADE,
+  test_class      TEXT    NOT NULL,
+  test_method     TEXT    NOT NULL,
+  result          TEXT    NOT NULL,                              -- passed|failed|error|skipped
+  duration_ms     INTEGER,
+  report_file     TEXT,                                          -- path to JUnit XML file
+  failure_message TEXT,
+  stack_trace     TEXT,
+  executed_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ---- COVERAGE RECORDS ----
+-- JaCoCo coverage data imported from XML report
+CREATE TABLE IF NOT EXISTS coverage_records (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id              INTEGER REFERENCES files(id) ON DELETE CASCADE,
+  method_id            INTEGER REFERENCES methods(id) ON DELETE CASCADE,
+  class_name           TEXT    NOT NULL,
+  method_name          TEXT,
+  line_coverage        REAL,                                    -- 0.0 to 100.0
+  branch_coverage      REAL,
+  instruction_coverage REAL,
+  complexity_coverage  REAL,
+  missed_lines         INTEGER DEFAULT 0,
+  covered_lines        INTEGER DEFAULT 0,
+  missed_branches      INTEGER DEFAULT 0,
+  covered_branches     INTEGER DEFAULT 0,
+  source               TEXT    DEFAULT 'jacoco',
+  imported_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ---- EVIDENCE LOG ----
+-- Tracks evidence package generation events
+CREATE TABLE IF NOT EXISTS evidence_log (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_class    TEXT    NOT NULL,
+  asil_level      TEXT    NOT NULL,
+  output_path     TEXT    NOT NULL,
+  files_generated INTEGER DEFAULT 0,
+  status          TEXT    NOT NULL DEFAULT 'generated',          -- generated|partial|error
+  generated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 -- ---- PARSE ERRORS ----
 CREATE TABLE IF NOT EXISTS parse_errors (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,6 +270,12 @@ CREATE INDEX IF NOT EXISTS idx_cfg_method      ON cfg_nodes(method_id);
 CREATE INDEX IF NOT EXISTS idx_edges_method    ON cfg_edges(method_id);
 CREATE INDEX IF NOT EXISTS idx_call_caller     ON call_edges(caller_id);
 CREATE INDEX IF NOT EXISTS idx_call_callee     ON call_edges(callee_id);
-CREATE INDEX IF NOT EXISTS idx_files_sha       ON files(sha256);
-CREATE INDEX IF NOT EXISTS idx_class_qualified ON classes(qualified_name);
-CREATE INDEX IF NOT EXISTS idx_fields_class    ON fields(class_id);
+CREATE INDEX IF NOT EXISTS idx_files_sha           ON files(sha256);
+CREATE INDEX IF NOT EXISTS idx_class_qualified     ON classes(qualified_name);
+CREATE INDEX IF NOT EXISTS idx_fields_class        ON fields(class_id);
+CREATE INDEX IF NOT EXISTS idx_mcdc_pairs_decision  ON mcdc_pairs(decision_id);
+CREATE INDEX IF NOT EXISTS idx_mcdc_pairs_condition ON mcdc_pairs(condition_id);
+CREATE INDEX IF NOT EXISTS idx_test_cases_target    ON test_cases(target_method_id);
+CREATE INDEX IF NOT EXISTS idx_test_results_case    ON test_results(test_case_id);
+CREATE INDEX IF NOT EXISTS idx_coverage_method      ON coverage_records(method_id);
+CREATE INDEX IF NOT EXISTS idx_coverage_file        ON coverage_records(file_id);
