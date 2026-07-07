@@ -351,11 +351,7 @@ async function handleTool(name, args) {
     case 'get_class': {
       const cls = db.getClassByQualifiedName(args.qualifiedName);
       if (!cls) return { error: `Class not found: ${args.qualifiedName}` };
-      return {
-        ...cls,
-        interfaces: JSON.parse(cls.interfaces ?? '[]'),
-        annotations: JSON.parse(cls.annotations ?? '[]'),
-      };
+      return cls;
     }
 
     case 'search_classes': {
@@ -517,8 +513,8 @@ async function handleTool(name, args) {
           kind: cls.kind,
           isAbstract: !!cls.is_abstract,
           superclass: cls.superclass,
-          interfaces: JSON.parse(cls.interfaces ?? '[]'),
-          annotations: JSON.parse(cls.annotations ?? '[]'),
+          interfaces: cls.interfaces,
+          annotations: cls.annotations,
           javadoc: cls.javadoc,
           asilLevel: cls.asil_level,
           lineStart: cls.line_start,

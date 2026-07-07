@@ -315,7 +315,7 @@ export class GraphDatabase {
   getStats() {
     const s = (sql) => this.db.prepare(sql).get();
     return {
-      files: s('SELECT COUNT(*) as n, SUM(line_count) as lines FROM files WHERE status="ok"'),
+      files: s("SELECT COUNT(*) as n, SUM(line_count) as lines FROM files WHERE status = 'ok'"),
       classes: s('SELECT COUNT(*) as n FROM classes'),
       methods: s('SELECT COUNT(*) as n, AVG(cyclomatic_complexity) as avg_cc, SUM(branch_count) as total_branches FROM methods'),
       cfg_nodes: s('SELECT COUNT(*) as n FROM cfg_nodes'),
