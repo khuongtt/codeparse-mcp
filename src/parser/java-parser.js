@@ -3,6 +3,10 @@
 // Node names verified against actual CST output.
 
 import { parse as javaParse } from 'java-parser';
+import { decomposeBoolean, buildTruthTable, computeMcdcPairs, createDecision } from './decision-utils.js';
+
+// Re-export for Xtend parser which imports these from java-parser
+export { decomposeBoolean, buildTruthTable, computeMcdcPairs, createDecision };
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -419,7 +423,7 @@ function emptyCfg() {
   return {
     cfgNodes: [], cfgEdges: [], callSites: [],
     booleanConditions: [], branchCount: 0, conditionCount: 0,
-    cyclomaticComplexity: 1, mcdcConditions: [],
+    cyclomaticComplexity: 1, decisions: [], mcdcConditions: [],
   };
 }
 
@@ -432,7 +436,7 @@ function analyzeBody(bodyNode) {
 class BodyAnalyzer {
   constructor() {
     this._nodes = []; this._edges = []; this._calls = [];
-    this._conds = []; this._mcdc = [];
+    this._conds = []; this._mcdc = []; this._decisions = [];
     this._branches = 0; this._condCount = 0; this._cc = 1;
     this._idx = 0;
     this._cur = this._addNode('ENTRY', 'entry', null, null);
@@ -477,8 +481,8 @@ class BodyAnalyzer {
     const cond = exprNode ? allTokenImages(exprNode).join(' ').slice(0, 200) : '';
     const stmts = node.children?.statement ?? [];
 
-    this._branches += 2; this._condCount++; this._cc++;
-    this._registerCond(cond);
+    this._cc++;
+    this._registerDecision('if', cond, lineOf(node));
 
     const branchId = this._addNode('BRANCH', `if (${cond})`, lineOf(node), cond);
     this._addEdge(this._cur, branchId);
@@ -507,8 +511,10 @@ class BodyAnalyzer {
     const inner = findFirst(node, 'basicForStatement') ?? node;
     const exprNode = inner.children?.expression?.[0];
     const cond = exprNode ? allTokenImages(exprNode).join(' ').slice(0, 200) : '';
-    this._branches += 2; this._cc++;
-    if (cond) { this._condCount++; this._registerCond(cond); }
+    this._cc++;
+    if (cond) {
+      this._registerDecision('for', cond, lineOf(node));
+    }
 
     const loopId = this._addNode('LOOP', `for (${cond || '...'})`, lineOf(node), cond || null);
     this._addEdge(this._cur, loopId);
@@ -541,8 +547,8 @@ class BodyAnalyzer {
     // children: While, LBrace, expression, RBrace, statement
     const exprNode = node.children?.expression?.[0];
     const cond = exprNode ? allTokenImages(exprNode).join(' ').slice(0, 200) : '';
-    this._branches += 2; this._condCount++; this._cc++;
-    this._registerCond(cond);
+    this._cc++;
+    this._registerDecision('while', cond, lineOf(node));
 
     const loopId = this._addNode('LOOP', `while (${cond})`, lineOf(node), cond);
     this._addEdge(this._cur, loopId);
@@ -559,7 +565,8 @@ class BodyAnalyzer {
   _visitDo(node) {
     const exprNode = node.children?.expression?.[0];
     const cond = exprNode ? allTokenImages(exprNode).join(' ').slice(0, 200) : '';
-    this._branches += 2; this._condCount++; this._cc++;
+    this._cc++;
+    this._registerDecision('do', cond, lineOf(node));
 
     const bodyId = this._addNode('STATEMENT', 'do_body', lineOf(node), null);
     this._addEdge(this._cur, bodyId);
@@ -666,18 +673,33 @@ class BodyAnalyzer {
     this._cur = stmtId;
   }
 
-  _registerCond(expr) {
-    if (!expr) return;
-    this._conds.push(expr);
-    const subConds = decomposeBoolean(expr);
-    if (subConds.length >= 2) {
-      const tt = buildTruthTable(subConds);
-      this._mcdc.push({
-        expression: expr,
-        subConditions: subConds,
-        truthTable: tt,
-        mcdcPairs: computeMcdcPairs(subConds, tt),
-      });
+  /**
+   * Register a decision with its boolean expression.
+   * Creates a decision object with atomic conditions and (for compound conditions)
+   * MC/DC truth table and independence pairs.
+   */
+  _registerDecision(kind, expression, line) {
+    if (!expression) return;
+    this._conds.push(expression);
+    this._branches += 2;
+
+    const decision = createDecision(kind, expression, line);
+    if (decision) {
+      this._decisions.push(decision);
+      this._condCount += decision.conditions.length;
+
+      // MC/DC for compound conditions
+      if (decision.conditions.length >= 2) {
+        const subConds = decision.conditions.map(c => c.normalized);
+        const tt = buildTruthTable(subConds);
+        this._mcdc.push({
+          expression,
+          subConditions: subConds,
+          truthTable: tt,
+          mcdcPairs: computeMcdcPairs(subConds, tt),
+          decisionSeq: this._decisions.length,
+        });
+      }
     }
   }
 
@@ -685,6 +707,7 @@ class BodyAnalyzer {
     return {
       cfgNodes: this._nodes, cfgEdges: this._edges, callSites: this._calls,
       booleanConditions: this._conds,
+      decisions: this._decisions,
       branchCount: this._branches, conditionCount: this._condCount,
       cyclomaticComplexity: this._cc, mcdcConditions: this._mcdc,
     };
@@ -692,42 +715,5 @@ class BodyAnalyzer {
 }
 
 // ── MC/DC ─────────────────────────────────────────────────────────────────────
-
-export function decomposeBoolean(expr) {
-  if (!expr) return [];
-  const stripped = expr.replace(/\(|\)/g, ' ');
-  const parts = stripped.split(/&&|\|\|/);
-  return [...new Set(
-    parts.map(p => p.replace(/^[!\s]+/, '').trim())
-         .filter(p => p.length > 1 && !/^\d+$/.test(p))
-  )];
-}
-
-export function buildTruthTable(subConds) {
-  const n = subConds.length;
-  if (n > 8) return null;
-  const rows = [];
-  for (let mask = 0; mask < (1 << n); mask++) {
-    const row = {};
-    for (let i = 0; i < n; i++) row[subConds[i]] = !!(mask & (1 << i));
-    rows.push(row);
-  }
-  return rows;
-}
-
-export function computeMcdcPairs(subConds, truthTable) {
-  if (!truthTable) return null;
-  const pairs = [];
-  for (let i = 0; i < subConds.length; i++) {
-    const cond = subConds[i];
-    let found = false;
-    for (let a = 0; a < truthTable.length && !found; a++) {
-      for (let b = a + 1; b < truthTable.length && !found; b++) {
-        const onlyI = subConds.every((c, j) => j === i || truthTable[a][c] === truthTable[b][c])
-                   && truthTable[a][cond] !== truthTable[b][cond];
-        if (onlyI) { pairs.push({ condition: cond, rowA: a, rowB: b }); found = true; }
-      }
-    }
-  }
-  return pairs;
-}
+// decomposeBoolean, buildTruthTable, computeMcdcPairs moved to decision-utils.js.
+// Re-exported above for xtend-parser.js compatibility.

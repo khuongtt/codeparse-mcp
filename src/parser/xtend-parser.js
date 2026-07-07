@@ -8,7 +8,7 @@
 // For CFG/MC/DC, we re-use the same BodyAnalyzer from java-parser after
 // normalizing Xtend expressions to an analyzable form.
 
-import { decomposeBoolean, buildTruthTable, computeMcdcPairs } from './java-parser.js';
+import { decomposeBoolean, buildTruthTable, computeMcdcPairs, createDecision } from './java-parser.js';
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -433,6 +433,7 @@ function analyzeXtendBody(bodyText) {
   const cfgEdges = [];
   const callSites = [];
   const booleanConditions = [];
+  const decisions = [];
   const mcdcConditions = [];
   let branchCount = 0;
   let conditionCount = 0;
@@ -448,6 +449,31 @@ function analyzeXtendBody(bodyText) {
     cfgEdges.push({ fromNode: f, toNode: t, edgeType: type, condition: cond });
   };
 
+  // Helper to register a decision with atomic conditions and MC/DC
+  const registerDecision = (kind, expr, line) => {
+    if (!expr) return;
+    booleanConditions.push(expr);
+    branchCount += 2;
+    const dec = createDecision(kind, expr, line);
+    if (dec) {
+      decisions.push(dec);
+      conditionCount += dec.conditions.length;
+
+      // MC/DC for compound conditions
+      if (dec.conditions.length >= 2) {
+        const subConds = dec.conditions.map(c => c.normalized);
+        const tt = buildTruthTable(subConds);
+        mcdcConditions.push({
+          expression: expr,
+          subConditions: subConds,
+          truthTable: tt,
+          mcdcPairs: computeMcdcPairs(subConds, tt),
+          decisionSeq: decisions.length,
+        });
+      }
+    }
+  };
+
   let prev = addNode('ENTRY', 'entry', null, null);
 
   for (let i = 0; i < lines.length; i++) {
@@ -457,25 +483,14 @@ function analyzeXtendBody(bodyText) {
     const ifMatch = line.match(/^if\s*\((.+?)\)/);
     if (ifMatch) {
       const cond = ifMatch[1];
-      branchCount += 2; conditionCount++; cc++;
-      booleanConditions.push(cond);
+      cc++;
+      registerDecision('if', cond, i + 1);
       const n = addNode('BRANCH', `if (${cond})`, i + 1, cond);
       addEdge(prev, n);
       const merge = addNode('STATEMENT', 'if_merge', null, null);
       addEdge(n, merge, 'true_branch', 'true');
       addEdge(n, merge, 'false_branch', 'false');
       prev = merge;
-
-      const subConds = decomposeBoolean(cond);
-      if (subConds.length >= 2) {
-        const tt = buildTruthTable(subConds);
-        mcdcConditions.push({
-          expression: cond,
-          subConditions: subConds,
-          truthTable: tt,
-          mcdcPairs: computeMcdcPairs(subConds, tt),
-        });
-      }
       continue;
     }
 
@@ -495,8 +510,8 @@ function analyzeXtendBody(bodyText) {
     const whileMatch = line.match(/^while\s*\((.+?)\)/);
     if (whileMatch) {
       const cond = whileMatch[1];
-      branchCount += 2; conditionCount++; cc++;
-      booleanConditions.push(cond);
+      cc++;
+      registerDecision('while', cond, i + 1);
       const n = addNode('LOOP', `while (${cond})`, i + 1, cond);
       addEdge(prev, n);
       const exit = addNode('STATEMENT', 'while_exit', null, null);
@@ -566,7 +581,8 @@ function analyzeXtendBody(bodyText) {
 
   return {
     cfgNodes, cfgEdges, callSites,
-    booleanConditions, branchCount, conditionCount,
+    booleanConditions, decisions,
+    branchCount, conditionCount,
     cyclomaticComplexity: cc, mcdcConditions,
   };
 }

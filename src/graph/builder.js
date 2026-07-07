@@ -169,6 +169,37 @@ export class GraphBuilder {
                 });
               }
 
+              // Decisions and atomic conditions
+              for (const dec of method.decisions ?? []) {
+                const seq = method.decisions.indexOf(dec) + 1;
+                const decisionUid = `D-${String(methodId).padStart(4, '0')}-${String(seq).padStart(3, '0')}`;
+                const decisionId = this.db.insertDecision({
+                  methodId,
+                  decisionUid,
+                  kind: dec.kind,
+                  expression: dec.expression,
+                  normalized: dec.normalized,
+                  operator: dec.operator,
+                  lineStart: dec.line_start,
+                  branchCount: dec.branch_count,
+                  mcdcRequired: dec.mcdc_required ? 1 : 0,
+                  parseStatus: dec.parse_status ?? 'ok',
+                });
+
+                for (const cond of dec.conditions ?? []) {
+                  const condUid = `C-${String(decisionId)}-${String(cond.position)}`;
+                  this.db.insertCondition({
+                    decisionId,
+                    conditionUid: condUid,
+                    text: cond.text ?? '',
+                    normalizedText: cond.normalized ?? null,
+                    position: cond.position ?? 1,
+                    conditionType: cond.condition_type ?? 'atomic',
+                    parseStatus: cond.parse_status ?? 'ok',
+                  });
+                }
+              }
+
               // MC/DC conditions
               for (const cond of method.mcdcConditions ?? []) {
                 this.db.insertMcdcCondition({
@@ -248,6 +279,38 @@ export class GraphBuilder {
           for (const call of method.callSites ?? []) {
             this.db.insertCallEdge({ callerId: methodId, calleeName: call.calleeName, calleeId: null, callType: 'method', line: call.line });
           }
+
+          // Decisions and atomic conditions
+          for (const dec of method.decisions ?? []) {
+            const seq = method.decisions.indexOf(dec) + 1;
+            const decisionUid = `D-${String(methodId).padStart(4, '0')}-${String(seq).padStart(3, '0')}`;
+            const decisionId = this.db.insertDecision({
+              methodId,
+              decisionUid,
+              kind: dec.kind,
+              expression: dec.expression,
+              normalized: dec.normalized,
+              operator: dec.operator,
+              lineStart: dec.line_start,
+              branchCount: dec.branch_count,
+              mcdcRequired: dec.mcdc_required ? 1 : 0,
+              parseStatus: dec.parse_status ?? 'ok',
+            });
+
+            for (const cond of dec.conditions ?? []) {
+              const condUid = `C-${String(decisionId)}-${String(cond.position)}`;
+              this.db.insertCondition({
+                decisionId,
+                conditionUid: condUid,
+                text: cond.text ?? '',
+                normalizedText: cond.normalized ?? null,
+                position: cond.position ?? 1,
+                conditionType: cond.condition_type ?? 'atomic',
+                parseStatus: cond.parse_status ?? 'ok',
+              });
+            }
+          }
+
           for (const cond of method.mcdcConditions ?? []) {
             this.db.insertMcdcCondition({ methodId, expression: cond.expression, subConditions: cond.subConditions, truthTable: cond.truthTable, mcdcPairs: cond.mcdcPairs });
           }

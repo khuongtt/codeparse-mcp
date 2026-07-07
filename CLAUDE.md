@@ -39,7 +39,7 @@ MCP Server (src/mcp/server.js)  ←  SQLite (src/db/schema.sql)
   Compatible with GitHub Copilot, Claude Desktop
 ```
 
-**Parsers** (`src/parser/`): Both parsers return `{ packageName, imports, classes, errors }`. Each class contains fields, methods, and each method includes CFG nodes/edges, call sites, boolean conditions, and MC/DC conditions. The Java parser uses the `java-parser` npm package (CST). The Xtend parser reuses `decomposeBoolean`/`buildTruthTable`/`computeMcdcPairs` from `java-parser.js`.
+**Parsers** (`src/parser/`): Both parsers return `{ packageName, imports, classes, errors }`. Each class contains fields, methods, and each method includes CFG nodes/edges, call sites, boolean conditions, **decisions** (branch points with decomposed atomic conditions), and MC/DC conditions. The Java parser uses the `java-parser` npm package (CST). The Xtend parser reuses `decomposeBoolean`/`buildTruthTable`/`computeMcdcPairs`/`createDecision` from `java-parser.js` and `decision-utils.js`.
 
 **GraphBuilder** (`src/graph/builder.js`): Orchestrates file scanning (glob-based), incremental sync via SHA-256 content hashing, and persistence. After inserting all data, it runs a second pass to resolve call graph edges (`resolveCalleeIds`). Adding a new language parser requires registering the parsing branch here.
 
@@ -81,14 +81,18 @@ Environment variables for Docker: `CODEPARSE_PROJECT_ROOT`, `CODEPARSE_DB_PATH`.
 - `src/db/schema.sql` — SQLite schema (files, classes, methods, cfg_nodes, cfg_edges, call_edges, mcdc_conditions, etc.)
 - `src/parser/java-parser.js` — Java CST parser and CFG/MC/DC body analyzer
 - `src/parser/xtend-parser.js` — Xtend pattern-based parser, reuses MC/DC logic from java-parser
+- `src/parser/decision-utils.js` — Shared decision/condition decomposition logic (createDecision, decomposeBoolean)
 
-## MCP Tools (v1.2.0)
+## MCP Tools (v2.0.0)
 
-All method responses use clean `snake_case` field names (no camelCase duplicates like `throwsList`, `booleanConditions`).
-HTML entities (`&lt;`, `&gt;`, `&amp;`) are decoded in condition expressions. Every response includes `recommended_next_actions`.
+All method responses use clean `snake_case` field names.
+HTML entities (`&lt;`, `&gt;`, `&amp;`) are decoded in condition expressions.
+Every response includes `recommended_next_actions`.
+Decisions (branch points) use UID format `D-{methodId}-{seq}`, conditions use `C-{decisionId}-{pos}`.
 
 | Tool | Description |
 |---|---|
-| `get_method_context` | **New** — Get full source context for a method (source code, fields, calls, decisions). Path-traversal safe. |
+| `get_decisions` | **New** — Get all decisions for a method with decomposed atomic conditions. Decision-UID scoped. Required for MC/DC planning. |
+| `get_method_context` | Full source context: source code, fields, calls, decisions (UID-scoped), parse quality. |
 
 See the tool definitions in `src/mcp/server.js` for the full list with input schemas.

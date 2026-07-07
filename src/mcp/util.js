@@ -178,6 +178,14 @@ export function recommendedNextActions(currentTool, context = {}) {
     });
   }
 
+  if (methodId && currentTool !== 'get_decisions') {
+    actions.push({
+      tool: 'get_decisions',
+      input: { method_id: methodId },
+      reason: 'View decision-level condition decomposition for MC/DC',
+    });
+  }
+
   if (methodId && currentTool !== 'get_mcdc') {
     actions.push({
       tool: 'get_mcdc',

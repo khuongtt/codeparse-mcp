@@ -46,7 +46,7 @@ const db = new GraphDatabase(config.dbPath);
 db.open();
 
 const server = new Server(
-  { name: 'codeparse-mcp', version: '1.2.0' },
+  { name: 'codeparse-mcp', version: '2.0.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -158,7 +158,19 @@ const TOOLS = [
     },
   },
 
-  // ── MC/DC queries ────────────────────────────────────────────────────────
+  // ── Decision / MC/DC queries ─────────────────────────────────────────────
+
+  {
+    name: 'get_decisions',
+    description: 'Get all decisions (if, while, for, do, switch) for a method with their atomic conditions. Each decision has a unique D-UID and decomposed atomic conditions. Required for decision-level MC/DC planning.',
+    inputSchema: {
+      type: 'object',
+      required: ['method_id'],
+      properties: {
+        method_id: { type: 'number', description: 'Method DB ID (from get_methods response)' },
+      },
+    },
+  },
 
   {
     name: 'get_mcdc',
@@ -300,6 +312,8 @@ async function handleTool(name, args) {
       if (args.force) {
         // Drop and recreate
         db.db.exec(`
+          DROP TABLE IF EXISTS conditions;
+          DROP TABLE IF EXISTS decisions;
           DROP TABLE IF EXISTS mcdc_conditions;
           DROP TABLE IF EXISTS call_edges;
           DROP TABLE IF EXISTS cfg_edges;
@@ -478,6 +492,59 @@ async function handleTool(name, args) {
       };
     }
 
+    // ── Decisions ──────────────────────────────────────────────────────────
+
+    case 'get_decisions': {
+      const decMethodId = args.method_id;
+      const decMethod = db.db.prepare(`
+        SELECT m.name, m.signature, m.cyclomatic_complexity, m.branch_count, m.condition_count,
+               c.qualified_name AS class_qualified_name,
+               f.path AS _file_path
+        FROM methods m
+        JOIN classes c ON c.id = m.class_id
+        JOIN files f ON f.id = m.file_id
+        WHERE m.id = ?
+      `).get(decMethodId);
+
+      if (!decMethod) return { error: `Method not found: ${decMethodId}` };
+
+      const decisions = db.getDecisionsForMethod(decMethodId);
+
+      return {
+        status: 'ok',
+        method_id: decMethodId,
+        method_name: decMethod.name,
+        signature: decMethod.signature,
+        class_qualified_name: decMethod.class_qualified_name,
+        file: { path: decMethod._file_path },
+        decisions: decisions.map(d => ({
+          decision_uid: d.decision_uid,
+          kind: d.kind,
+          line_start: d.line_start,
+          expression: decodeHtmlEntities(d.expression),
+          normalized: decodeHtmlEntities(d.normalized),
+          operator: d.operator,
+          branch_count: d.branch_count,
+          mcdc_required: !!d.mcdc_required,
+          parse_status: d.parse_status,
+          conditions: (d.conditions || []).map(c => ({
+            condition_uid: c.condition_uid,
+            text: decodeHtmlEntities(c.text),
+            normalized_text: decodeHtmlEntities(c.normalized_text),
+            position: c.position,
+            condition_type: c.condition_type,
+            parse_status: c.parse_status,
+          })),
+        })),
+        decision_count: decisions.length,
+        mcdc_required_count: decisions.filter(d => !!d.mcdc_required).length,
+        recommended_next_actions: recommendedNextActions('get_decisions', {
+          methodId: decMethodId,
+          qualifiedName: decMethod.class_qualified_name,
+        }),
+      };
+    }
+
     // ── MC/DC ──────────────────────────────────────────────────────────────
 
     case 'get_mcdc': {
@@ -496,6 +563,7 @@ async function handleTool(name, args) {
       bc = bc.map(decodeHtmlEntities);
 
       const decodedConds = decodeMcdcConditions(conditions);
+      const decisions = db.getDecisionsForMethod(args.methodId);
 
       return {
         method_id: args.methodId,
@@ -505,12 +573,29 @@ async function handleTool(name, args) {
         condition_count: method.condition_count,
         cyclomatic_complexity: method.cyclomatic_complexity,
         boolean_conditions: bc,
+        decisions: decisions.length > 0 ? decisions.map(d => ({
+          decision_uid: d.decision_uid,
+          kind: d.kind,
+          expression: decodeHtmlEntities(d.normalized || d.expression),
+          mcdc_required: !!d.mcdc_required,
+          conditions: (d.conditions || []).map(c => ({
+            condition_uid: c.condition_uid,
+            text: decodeHtmlEntities(c.text),
+          })),
+          mcdc_analysis: decodedConds.filter(mc =>
+            mc.expression === d.expression || mc.expression === d.normalized
+          ).map(mc => ({
+            sub_conditions: mc.subConditions,
+            truth_table: mc.truthTable,
+            mcdc_pairs: mc.mcdcPairs,
+          })),
+        })) : undefined,
         mcdc_conditions: decodedConds,
         file: { path: method._file_path },
         coverage_requirements: {
           c0_statement: 'Every statement must be executed',
           c1_branch: `All ${method.branch_count ?? 0} branches (true/false) must be covered`,
-          mcdc: `Each of ${conditions.length} boolean decisions must independently affect outcome`,
+          mcdc: `${decisions.filter(d => !!d.mcdc_required).length} compound decisions require MC/DC independence pairs`,
           asil_d_target: '100% MC/DC required',
         },
         parse_quality: buildParseQuality(method),
@@ -609,6 +694,7 @@ async function handleTool(name, args) {
       for (const m of targetMethods) {
         const cfg = db.getCfgForMethod(m.id);
         const mcdc = db.getMcdcForMethod(m.id);
+        const decisions = db.getDecisionsForMethod(m.id);
         const callees = db.getCallees(m.id);
 
         methodContexts.push({
@@ -629,7 +715,21 @@ async function handleTool(name, args) {
           cyclomatic_complexity: m.cyclomatic_complexity,
           branch_count: m.branch_count,
           condition_count: m.condition_count,
+          decision_count: decisions.length,
           boolean_conditions: (m.boolean_conditions || []).map(decodeHtmlEntities),
+          decisions: decisions.map(d => ({
+            decision_uid: d.decision_uid,
+            kind: d.kind,
+            line_start: d.line_start,
+            expression: decodeHtmlEntities(d.expression),
+            normalized: decodeHtmlEntities(d.normalized),
+            conditions: (d.conditions || []).map(c => ({
+              condition_uid: c.condition_uid,
+              text: decodeHtmlEntities(c.text),
+              position: c.position,
+            })),
+            mcdc_required: !!d.mcdc_required,
+          })),
           file: m.file,
           cfg: {
             node_count: cfg.nodes.length,
@@ -839,15 +939,23 @@ async function handleTool(name, args) {
         }));
       }
 
-      // 4. Include decisions (MC/DC conditions)
+      // 4. Include decisions (from decisions/conditions tables)
       if (args.include_decisions !== false) {
-        const mcdc = db.getMcdcForMethod(methodId);
-        response.decisions = decodeMcdcConditions(mcdc).map(c => ({
-          expression: c.expression,
-          sub_conditions: c.subConditions,
-          truth_table: c.truthTable,
-          mcdc_pairs: c.mcdcPairs,
-          line: c.line,
+        const decisions = db.getDecisionsForMethod(methodId);
+        response.decisions = decisions.map(d => ({
+          decision_uid: d.decision_uid,
+          kind: d.kind,
+          line_start: d.line_start,
+          expression: decodeHtmlEntities(d.expression),
+          normalized: decodeHtmlEntities(d.normalized),
+          operator: d.operator,
+          mcdc_required: !!d.mcdc_required,
+          conditions: (d.conditions || []).map(c => ({
+            condition_uid: c.condition_uid,
+            text: decodeHtmlEntities(c.text),
+            position: c.position,
+            condition_type: c.condition_type,
+          })),
         }));
       }
 

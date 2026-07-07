@@ -38,6 +38,25 @@ export class GraphDatabase {
   _applySchema() {
     const sql = readFileSync(join(__dirname, 'schema.sql'), 'utf8');
     this.db.exec(sql);
+
+    // Schema migration: check current version
+    try {
+      const row = this.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
+      const version = parseInt(row?.value ?? '1', 10);
+      if (version < 2) {
+        this.transaction(() => {
+          // v1 → v2: add decision_id column to mcdc_conditions (if not exists)
+          try {
+            this.db.exec("ALTER TABLE mcdc_conditions ADD COLUMN decision_id INTEGER REFERENCES decisions(id)");
+          } catch (_) { /* column may already exist */ }
+
+          this.db.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
+        });
+        process.stderr.write('[codeparse-mcp] Schema migrated v1 → v2 (decisions/conditions)\n');
+      }
+    } catch (_) {
+      // Meta table may not exist yet on fresh schema — no migration needed
+    }
   }
 
   // ── Transactions ─────────────────────────────────────────
@@ -223,16 +242,78 @@ export class GraphDatabase {
     }).lastInsertRowid;
   }
 
+  // ── Decisions / Conditions ──────────────────────────────
+
+  insertDecision(dec) {
+    return this.db.prepare(`
+      INSERT INTO decisions
+        (method_id, decision_uid, kind, expression, normalized, operator,
+         line_start, branch_count, mcdc_required, parse_status)
+      VALUES
+        (@methodId, @decisionUid, @kind, @expression, @normalized, @operator,
+         @lineStart, @branchCount, @mcdcRequired, @parseStatus)
+    `).run({
+      methodId: dec.methodId,
+      decisionUid: dec.decisionUid,
+      kind: dec.kind,
+      expression: dec.expression ?? null,
+      normalized: dec.normalized ?? null,
+      operator: dec.operator ?? null,
+      lineStart: dec.lineStart ?? null,
+      branchCount: dec.branchCount ?? 2,
+      mcdcRequired: dec.mcdcRequired ? 1 : 0,
+      parseStatus: dec.parseStatus ?? 'ok',
+    }).lastInsertRowid;
+  }
+
+  insertCondition(cond) {
+    return this.db.prepare(`
+      INSERT INTO conditions
+        (decision_id, condition_uid, text, normalized_text, position, condition_type, parse_status)
+      VALUES
+        (@decisionId, @conditionUid, @text, @normalizedText, @position, @conditionType, @parseStatus)
+    `).run({
+      decisionId: cond.decisionId,
+      conditionUid: cond.conditionUid,
+      text: cond.text ?? '',
+      normalizedText: cond.normalizedText ?? null,
+      position: cond.position ?? 1,
+      conditionType: cond.conditionType ?? 'atomic',
+      parseStatus: cond.parseStatus ?? 'ok',
+    }).lastInsertRowid;
+  }
+
+  getDecisionsForMethod(methodId) {
+    const decisions = this.db.prepare(
+      'SELECT * FROM decisions WHERE method_id = ? ORDER BY id'
+    ).all(methodId);
+
+    for (const d of decisions) {
+      d.conditions = this.db.prepare(
+        'SELECT * FROM conditions WHERE decision_id = ? ORDER BY position'
+      ).all(d.id);
+    }
+    return decisions;
+  }
+
+  getDecisionCountForMethod(methodId) {
+    const row = this.db.prepare(
+      'SELECT COUNT(*) AS n FROM decisions WHERE method_id = ?'
+    ).get(methodId);
+    return row?.n ?? 0;
+  }
+
   // ── MC/DC conditions ─────────────────────────────────────
 
   insertMcdcCondition(cond) {
     return this.db.prepare(`
       INSERT INTO mcdc_conditions
-        (method_id, cfg_node_id, expression, sub_conditions, truth_table, mcdc_pairs, line)
+        (method_id, decision_id, cfg_node_id, expression, sub_conditions, truth_table, mcdc_pairs, line)
       VALUES
-        (@methodId, @cfgNodeId, @expression, @subConditions, @truthTable, @mcdcPairs, @line)
+        (@methodId, @decisionId, @cfgNodeId, @expression, @subConditions, @truthTable, @mcdcPairs, @line)
     `).run({
       methodId: cond.methodId,
+      decisionId: cond.decisionId ?? null,
       cfgNodeId: cond.cfgNodeId ?? null,
       expression: cond.expression,
       subConditions: JSON.stringify(cond.subConditions ?? []),
@@ -293,6 +374,7 @@ export class GraphDatabase {
       boolean_conditions: JSON.parse(m.boolean_conditions ?? '[]'),
       branch_count: m.branch_count,
       condition_count: m.condition_count,
+      decision_count: this.getDecisionCountForMethod(m.id),
       file: {
         id: m.file_id,
         path: m._file_path,
@@ -368,6 +450,7 @@ export class GraphDatabase {
       branch_count: m.branch_count,
       condition_count: m.condition_count,
       class_qualified_name: m.class_qname,
+      decision_count: this.getDecisionCountForMethod(m.id),
       file: {
         id: m.file_id,
         path: m._file_path,

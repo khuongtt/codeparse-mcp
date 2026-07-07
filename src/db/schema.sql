@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO meta VALUES ('schema_version', '1');
+INSERT OR IGNORE INTO meta VALUES ('schema_version', '2');
 INSERT OR IGNORE INTO meta VALUES ('created_at', datetime('now'));
 
 -- ---- FILES ----
@@ -130,11 +130,42 @@ CREATE TABLE IF NOT EXISTS dependencies (
   dep_type      TEXT    NOT NULL DEFAULT 'import' -- import|extends|implements|uses
 );
 
+-- ---- DECISIONS ----
+-- Each branch point (if, while, for, do, switch, ternary) is a decision
+CREATE TABLE IF NOT EXISTS decisions (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  method_id     INTEGER NOT NULL REFERENCES methods(id) ON DELETE CASCADE,
+  decision_uid  TEXT    NOT NULL,               -- D-{methodId}-{seq}
+  kind          TEXT    NOT NULL,               -- if|while|for|do|switch|ternary|return|assignment
+  expression    TEXT,                           -- full boolean expression
+  normalized    TEXT,                           -- normalized form (C1 && C2, etc.)
+  operator      TEXT,                           -- AND|OR|MIXED|null
+  line_start    INTEGER,
+  line_end      INTEGER,
+  branch_count  INTEGER DEFAULT 2,
+  mcdc_required INTEGER DEFAULT 0,              -- true if >=2 atomic conditions
+  parse_status  TEXT    DEFAULT 'ok'
+);
+
+-- ---- CONDITIONS ----
+-- Atomic boolean conditions decomposed from decisions
+CREATE TABLE IF NOT EXISTS conditions (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id     INTEGER NOT NULL REFERENCES decisions(id) ON DELETE CASCADE,
+  condition_uid   TEXT    NOT NULL,              -- C-{decisionId}-{position}
+  text            TEXT    NOT NULL,              -- atomic condition as in source
+  normalized_text TEXT,                          -- normalized form (trimmed, ! stripped)
+  position        INTEGER,                       -- ordinal position in decision
+  condition_type  TEXT    DEFAULT 'atomic',      -- atomic|negated|compound
+  parse_status    TEXT    DEFAULT 'ok'
+);
+
 -- ---- MCDC CONDITIONS ----
 -- Expanded MC/DC condition table for ASIL-D analysis
 CREATE TABLE IF NOT EXISTS mcdc_conditions (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   method_id     INTEGER NOT NULL REFERENCES methods(id) ON DELETE CASCADE,
+  decision_id   INTEGER REFERENCES decisions(id),
   cfg_node_id   INTEGER REFERENCES cfg_nodes(id),
   expression    TEXT    NOT NULL,               -- full boolean expression
   sub_conditions TEXT   NOT NULL,               -- JSON array of atomic sub-conditions

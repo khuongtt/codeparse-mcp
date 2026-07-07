@@ -60,6 +60,8 @@ program
     if (opts.force) {
       console.log(chalk.yellow('\n  ⚠  Force flag set — dropping all tables...'));
       db.db.exec(`
+        DROP TABLE IF EXISTS conditions;
+        DROP TABLE IF EXISTS decisions;
         DROP TABLE IF EXISTS mcdc_conditions;
         DROP TABLE IF EXISTS call_edges;
         DROP TABLE IF EXISTS cfg_edges;
