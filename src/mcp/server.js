@@ -756,7 +756,7 @@ async function handleTool(name, args) {
 
       // Respect selective depth flags
       const includeCfg = args.include_cfg !== false;
-      const includeSource = args.include_source === true;
+      const includeSource = args.include_source !== false;
       const includeDecisions = args.include_decisions !== false;
       const includeMcdc = args.include_mcdc !== false;
       const includeCalls = args.include_calls !== false;
@@ -782,6 +782,15 @@ async function handleTool(name, args) {
         const fieldAccesses = db.getFieldAccessesForMethod(m.id);
         const boundaryHints = computeBoundaryHints(decisions, m.parameters ?? []);
 
+        let source = null, sourceTruncated = false;
+        if (includeSource) {
+          const srcResult = readSourceRange(config.projectRoot, m.file?.path ?? '', m.line_start, m.line_end, MAX_SOURCE_LINES_PER_METHOD);
+          if (!srcResult.error) {
+            source = srcResult.content;
+            sourceTruncated = srcResult.truncated;
+          }
+        }
+
         methodContexts.push({
           id: m.id,
           name: m.name,
@@ -797,6 +806,7 @@ async function handleTool(name, args) {
           line_start: m.line_start,
           line_end: m.line_end,
           asil_level: m.asil_level,
+          ...(source ? { source, source_truncated: sourceTruncated } : {}),
           cyclomatic_complexity: m.cyclomatic_complexity,
           branch_count: m.branch_count,
           condition_count: m.condition_count,
