@@ -748,7 +748,7 @@ async function handleTool(name, args) {
         const callees = db.getCallees(m.id);
 
         const fieldAccesses = db.getFieldAccessesForMethod(m.id);
-        const boundaryHints = computeBoundaryHints(decisions, m.parameters ? JSON.parse(m.parameters) : []);
+        const boundaryHints = computeBoundaryHints(decisions, m.parameters ?? []);
 
         methodContexts.push({
           id: m.id,
