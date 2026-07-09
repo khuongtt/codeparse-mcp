@@ -444,6 +444,9 @@ class BodyAnalyzer {
     this._fieldAccesses = [];
     this._classFields = classFields; // [{name, type}] for field name matching
     this._localVars = new Set(); // track local variable declarations
+    // Loop/switch context stack for break/continue targets
+    // Each entry: { loopHeadId, loopMergeId } — continue targets loopHead, break targets loopMerge
+    this._loopStack = [];
   }
 
   _addNode(type, label, line, cond, exceptionType) {
@@ -477,6 +480,8 @@ class BodyAnalyzer {
       case 'statementExpression': this._visitStatementExpr(node); return;
       case 'conditionalExpression': this._visitConditionalExpr(node); return;
       case 'localVariableDeclarationStatement': this._visitLocalVarDecl(node); return;
+      case 'breakStatement': this._visitBreak(node); return;
+      case 'continueStatement': this._visitContinue(node); return;
     }
     if (node.children) for (const arr of Object.values(node.children)) for (const c of arr) this._visitNode(c);
   }
@@ -534,28 +539,21 @@ class BodyAnalyzer {
   }
 
   _visitFor(node) {
-    // basicForStatement: For, LBrace, forInit, Semicolon, expression, forUpdate, RBrace, statement
     const inner = findFirst(node, 'basicForStatement') ?? node;
     const exprNode = inner.children?.expression?.[0];
     const cond = exprNode ? allTokenImages(exprNode).join(' ').slice(0, 200) : '';
     this._cc++;
-    if (cond) {
-      this._registerDecision('for', cond, lineOf(node));
-    }
+    if (cond) this._registerDecision('for', cond, lineOf(node));
 
     const loopId = this._addNode('LOOP', `for (${cond || '...'})`, lineOf(node), cond || null);
     this._addEdge(this._cur, loopId);
-
     const exitId = this._addNode('STATEMENT', 'for_exit', null, null);
     this._addEdge(loopId, exitId, 'false_branch', 'false');
 
+    this._loopStack.push({ loopHeadId: loopId, loopMergeId: exitId });
     const body = inner.children?.statement?.[0];
-    if (body) {
-      this._cur = loopId;
-      this._visitNode(body);
-      this._addEdge(this._cur, loopId, 'loop_back');
-    }
-
+    if (body) { this._cur = loopId; this._visitNode(body); this._addEdge(this._cur, loopId, 'loop_back'); }
+    this._loopStack.pop();
     this._cur = exitId;
   }
 
@@ -565,13 +563,14 @@ class BodyAnalyzer {
     this._addEdge(this._cur, loopId);
     const exitId = this._addNode('STATEMENT', 'foreach_exit', null, null);
     this._addEdge(loopId, exitId, 'false_branch', 'false');
+    this._loopStack.push({ loopHeadId: loopId, loopMergeId: exitId });
     const body = node.children?.statement?.[0];
     if (body) { this._cur = loopId; this._visitNode(body); this._addEdge(this._cur, loopId, 'loop_back'); }
+    this._loopStack.pop();
     this._cur = exitId;
   }
 
   _visitWhile(node) {
-    // children: While, LBrace, expression, RBrace, statement
     const exprNode = node.children?.expression?.[0];
     const cond = exprNode ? allTokenImages(exprNode).join(' ').slice(0, 200) : '';
     this._cc++;
@@ -579,13 +578,13 @@ class BodyAnalyzer {
 
     const loopId = this._addNode('LOOP', `while (${cond})`, lineOf(node), cond);
     this._addEdge(this._cur, loopId);
-
     const exitId = this._addNode('STATEMENT', 'while_exit', null, null);
     this._addEdge(loopId, exitId, 'false_branch', 'false');
 
+    this._loopStack.push({ loopHeadId: loopId, loopMergeId: exitId });
     const body = node.children?.statement?.[0];
     if (body) { this._cur = loopId; this._visitNode(body); this._addEdge(this._cur, loopId, 'loop_back'); }
-
+    this._loopStack.pop();
     this._cur = exitId;
   }
 
@@ -598,7 +597,6 @@ class BodyAnalyzer {
     const bodyId = this._addNode('STATEMENT', 'do_body', lineOf(node), null);
     this._addEdge(this._cur, bodyId);
     this._cur = bodyId;
-    if (node.children?.statement?.[0]) this._visitNode(node.children.statement[0]);
 
     const checkId = this._addNode('BRANCH', `while (${cond})`, null, cond);
     this._addEdge(this._cur, checkId);
@@ -606,6 +604,15 @@ class BodyAnalyzer {
 
     const exitId = this._addNode('STATEMENT', 'do_exit', null, null);
     this._addEdge(checkId, exitId, 'false_branch', 'false');
+
+    // Push loop context before body visit (break→exitId, continue→checkId)
+    this._loopStack.push({ loopHeadId: checkId, loopMergeId: exitId });
+    this._cur = bodyId;
+    // Re-visit body with loop context active so break/continue work
+    if (node.children?.statement?.[0]) this._visitNode(node.children.statement[0]);
+    this._addEdge(this._cur, checkId, 'loop_back', 'true');
+    this._loopStack.pop();
+    this._cur = exitId;
     this._cur = exitId;
   }
 
@@ -619,11 +626,14 @@ class BodyAnalyzer {
     const groups = findAll(node, 'switchBlockStatementGroup');
     this._cc += Math.max(1, groups.length);
 
+    // Push loop context for break in switch (break → mergeId, no continue)
+    this._loopStack.push({ loopHeadId: null, loopMergeId: mergeId });
     for (const g of groups) {
       this._cur = switchId;
       this._visitNode(g);
-      this._addEdge(this._cur, mergeId);
+      if (this._cur) this._addEdge(this._cur, mergeId);
     }
+    this._loopStack.pop();
     this._cur = mergeId;
   }
 
@@ -685,6 +695,25 @@ class BodyAnalyzer {
     const throwId = this._addNode('THROW', 'throw', lineOf(node), null, exceptionType);
     this._addEdge(this._cur, throwId, 'exception');
     this._cur = throwId;
+  }
+
+  _visitBreak(node) {
+    const ctx = this._loopStack[this._loopStack.length - 1];
+    if (!ctx) return; // break outside loop — ignore
+    const id = this._addNode('STATEMENT', 'break', lineOf(node), null);
+    this._addEdge(this._cur, id);
+    this._addEdge(id, ctx.loopMergeId, 'break');
+    // Break is terminal for this path — set cur to dead node so subsequent edges don't attach
+    this._cur = null;
+  }
+
+  _visitContinue(node) {
+    const ctx = this._loopStack[this._loopStack.length - 1];
+    if (!ctx) return;
+    const id = this._addNode('STATEMENT', 'continue', lineOf(node), null);
+    this._addEdge(this._cur, id);
+    this._addEdge(id, ctx.loopHeadId, 'continue');
+    this._cur = null;
   }
 
   _visitStatementExpr(node) {

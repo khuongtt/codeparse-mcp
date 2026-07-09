@@ -105,6 +105,7 @@ export class IrIngest {
       booleanConditions: method.booleanConditions ?? [],
       branchCount: method.branchCount ?? 0,
       conditionCount: method.conditionCount ?? 0,
+      asilLevel: method.asilLevel ?? method.asil_level ?? null,
     });
 
     // CFG nodes

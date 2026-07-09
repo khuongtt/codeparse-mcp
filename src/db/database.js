@@ -86,6 +86,14 @@ export class GraphDatabase {
         });
         process.stderr.write('[codeparse-mcp] Schema migrated v3 → v4 (field_accesses + exception_type)\n');
       }
+      // v4 → v5: per-method asil_level
+      if (version < 5) {
+        try {
+          this.db.exec("ALTER TABLE methods ADD COLUMN asil_level TEXT DEFAULT NULL");
+        } catch (_) { /* column may already exist */ }
+        this.db.prepare("UPDATE meta SET value = '5' WHERE key = 'schema_version'").run();
+        process.stderr.write('[codeparse-mcp] Schema migrated v4 → v5 (method asil_level)\n');
+      }
     } catch (_) {
       // Meta table may not exist yet on fresh schema — no migration needed
     }
@@ -180,12 +188,12 @@ export class GraphDatabase {
         (class_id, file_id, name, signature, return_type, visibility,
          is_static, is_abstract, is_override, annotations, parameters,
          throws_list, javadoc, line_start, line_end, cyclomatic_complexity,
-         boolean_conditions, branch_count, condition_count)
+         boolean_conditions, branch_count, condition_count, asil_level)
       VALUES
         (@classId, @fileId, @name, @signature, @returnType, @visibility,
          @isStatic, @isAbstract, @isOverride, @annotations, @parameters,
          @throwsList, @javadoc, @lineStart, @lineEnd, @cyclomaticComplexity,
-         @booleanConditions, @branchCount, @conditionCount)
+         @booleanConditions, @branchCount, @conditionCount, @asilLevel)
     `).run({
       classId: method.classId,
       fileId: method.fileId,
@@ -206,6 +214,7 @@ export class GraphDatabase {
       booleanConditions: JSON.stringify(method.booleanConditions ?? []),
       branchCount: method.branchCount ?? 0,
       conditionCount: method.conditionCount ?? 0,
+      asilLevel: method.asilLevel ?? null,
     }).lastInsertRowid;
   }
 

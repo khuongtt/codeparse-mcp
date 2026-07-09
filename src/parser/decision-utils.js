@@ -107,6 +107,17 @@ export function evalTree(tree, vals) {
 }
 
 /**
+ * Extract all atomic condition texts from an AST in order.
+ * Handles single-letter names, parens, negation — all tree forms.
+ */
+function extractAtoms(tree) {
+  if (!tree) return [];
+  if (tree.atom !== undefined) return [tree.atom.trim()];
+  if (tree.op === '!') return extractAtoms(tree.child);
+  return [...extractAtoms(tree.left), ...extractAtoms(tree.right)];
+}
+
+/**
  * Detect the top-level operator(s) from an AST.
  * Returns: 'AND' | 'OR' | 'MIXED' | null
  */
@@ -179,7 +190,7 @@ export function decomposeBoolean(expr) {
  */
 export function buildTruthTable(subConds) {
   const n = subConds.length;
-  if (n > 8) return null;
+  if (n > 12) return null; // 2^12=4096 rows — practical limit for in-memory
   const rows = [];
   for (let mask = 0; mask < (1 << n); mask++) {
     const row = {};
@@ -303,7 +314,12 @@ export function createDecision(kind, expression, line) {
   if (!expression) return null;
 
   const tree = parseBooleanExpr(expression);
-  const atomicTexts = decomposeBoolean(expression);
+  // Use AST tree for atom extraction (handles single-letter conditions,
+  // parenthesized nesting, negation; decomposeBoolean regex approach fails on these)
+  // Use Set to dedup — same atom text = same condition for MC/DC purposes
+  const atomicTexts = tree
+    ? [...new Set(extractAtoms(tree))]
+    : decomposeBoolean(expression);
 
   const conditions = atomicTexts.map((text, i) => ({
     text,

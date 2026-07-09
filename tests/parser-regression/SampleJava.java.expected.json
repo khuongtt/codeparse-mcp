@@ -96,8 +96,8 @@
               "mcdcRequired": false,
               "conditions": [
                 {
-                  "text": "items . get   i   % 2 == 0",
-                  "normalizedText": "items . get   i   % 2 == 0",
+                  "text": "items . get",
+                  "normalizedText": "items . get",
                   "position": 1,
                   "conditionType": "atomic",
                   "parseStatus": "ok"

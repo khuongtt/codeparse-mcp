@@ -110,8 +110,8 @@
             "iterate:i",
             "i % 2 == 0"
           ],
-          "cfgNodeCount": 7,
-          "cfgEdgeCount": 7,
+          "cfgNodeCount": 8,
+          "cfgEdgeCount": 9,
           "callSiteCount": 1,
           "mcdcConditionCount": 0
         },

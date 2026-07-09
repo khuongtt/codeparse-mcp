@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO meta VALUES ('schema_version', '4');
+INSERT OR IGNORE INTO meta VALUES ('schema_version', '5');
 INSERT OR IGNORE INTO meta VALUES ('created_at', datetime('now'));
 
 -- ---- FILES ----
@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS methods (
   -- MC/DC fields
   boolean_conditions TEXT,                      -- JSON array of conditions found
   branch_count    INTEGER DEFAULT 0,
-  condition_count INTEGER DEFAULT 0
+  condition_count INTEGER DEFAULT 0,
+  asil_level      TEXT    DEFAULT NULL           -- detected from @ASIL annotation or comment
 );
 
 -- ---- CFG NODES ----

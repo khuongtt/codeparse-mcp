@@ -50,6 +50,21 @@ class XtendParser {
 
   // ── Entry ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Extract text between balanced parentheses starting at openPos in line.
+   * Handles nested parens. Returns { cond, endPos } or null.
+   */
+  _extractParens(line, openPos) {
+    if (line[openPos] !== '(') return null;
+    let depth = 0;
+    for (let i = openPos; i < line.length; i++) {
+      if (line[i] === '(') depth++;
+      if (line[i] === ')') depth--;
+      if (depth === 0) return { cond: line.slice(openPos + 1, i).trim(), endPos: i };
+    }
+    return null; // multi-line — fallback to regex
+  }
+
   parse() {
     this._parseTopLevel();
   }
@@ -449,6 +464,18 @@ function analyzeXtendBody(bodyText) {
     cfgEdges.push({ fromNode: f, toNode: t, edgeType: type, condition: cond });
   };
 
+  // Extract text between balanced parens (handles nested parens in conditions)
+  const extractParens = (text, openPos) => {
+    if (text[openPos] !== '(') return null;
+    let depth = 0;
+    for (let i = openPos; i < text.length; i++) {
+      if (text[i] === '(') depth++;
+      if (text[i] === ')') depth--;
+      if (depth === 0) return { cond: text.slice(openPos + 1, i).trim(), endPos: i };
+    }
+    return null;
+  };
+
   // Helper to register a decision (v3 IR camelCase, MC/DC centralized in M6)
   const registerDecision = (kind, expr, line) => {
     if (!expr) return;
@@ -512,44 +539,57 @@ function analyzeXtendBody(bodyText) {
     }
 
     // else-if expression
-    const elseIfMatch = line.match(/^else\s+if\s*\((.+?)\)/);
-    if (elseIfMatch) {
-      cc++;
-      registerDecision('else_if', elseIfMatch[1], i + 1);
-      const n = addNode('BRANCH', `else if (${elseIfMatch[1]})`, i + 1, elseIfMatch[1]);
-      addEdge(prev, n);
-      const merge = addNode('STATEMENT', 'else_if_merge', null, null);
-      addEdge(n, merge, 'true_branch', 'true');
-      addEdge(n, merge, 'false_branch', 'false');
-      prev = merge;
-      continue;
+    const elseIfPos = line.indexOf('else if');
+    if (elseIfPos >= 0) {
+      const openParen = line.indexOf('(', elseIfPos);
+      if (openParen >= 0) {
+        const pc = extractParens(line, openParen);
+        if (pc && pc.cond) {
+          cc++;
+          registerDecision('else_if', pc.cond, i + 1);
+          const n = addNode('BRANCH', `else if (${pc.cond})`, i + 1, pc.cond);
+          addEdge(prev, n);
+          const merge = addNode('STATEMENT', 'else_if_merge', null, null);
+          addEdge(n, merge, 'true_branch', 'true');
+          addEdge(n, merge, 'false_branch', 'false');
+          prev = merge;
+          continue;
+        }
+      }
     }
 
     // if expression
-    const ifMatch = line.match(/^if\s*\((.+?)\)/);
-    if (ifMatch) {
-      const cond = ifMatch[1];
-      cc++;
-      registerDecision('if', cond, i + 1);
-      const n = addNode('BRANCH', `if (${cond})`, i + 1, cond);
-      addEdge(prev, n);
-      const merge = addNode('STATEMENT', 'if_merge', null, null);
-      addEdge(n, merge, 'true_branch', 'true');
-      addEdge(n, merge, 'false_branch', 'false');
-      prev = merge;
-      continue;
+    const ifPos = line.indexOf('if ');
+    if (ifPos >= 0) {
+      const openParen = line.indexOf('(', ifPos);
+      if (openParen >= 0) {
+        const pc = extractParens(line, openParen);
+        if (pc && pc.cond) {
+          cc++;
+          registerDecision('if', pc.cond, i + 1);
+          const n = addNode('BRANCH', `if (${pc.cond})`, i + 1, pc.cond);
+          addEdge(prev, n);
+          const merge = addNode('STATEMENT', 'if_merge', null, null);
+          addEdge(n, merge, 'true_branch', 'true');
+          addEdge(n, merge, 'false_branch', 'false');
+          prev = merge;
+          continue;
+        }
+      }
     }
 
     // for/forEach iteration
     const forMatch = line.match(/^(?:for|forEach)\s*[\(\[]/);
     if (forMatch) {
       cc++;
-      // Extract loop variable name as 'condition' text
       const varMatch = line.match(/^for\s*\((\w+)/);
       const loopVar = varMatch ? `iterate:${varMatch[1]}` : 'for-each';
       registerDecision('foreach', loopVar, i + 1);
       const n = addNode('LOOP', line.slice(0, 60), i + 1, loopVar);
       addEdge(prev, n);
+      const body = addNode('STATEMENT', 'loop_body', i + 1, null);
+      addEdge(n, body, 'true_branch', 'true');
+      addEdge(body, n, 'loop_back');
       const exit = addNode('STATEMENT', 'loop_exit', null, null);
       addEdge(n, exit, 'false_branch', 'false');
       prev = exit;
@@ -557,17 +597,25 @@ function analyzeXtendBody(bodyText) {
     }
 
     // while
-    const whileMatch = line.match(/^while\s*\((.+?)\)/);
-    if (whileMatch) {
-      const cond = whileMatch[1];
-      cc++;
-      registerDecision('while', cond, i + 1);
-      const n = addNode('LOOP', `while (${cond})`, i + 1, cond);
-      addEdge(prev, n);
-      const exit = addNode('STATEMENT', 'while_exit', null, null);
-      addEdge(n, exit, 'false_branch', 'false');
-      prev = exit;
-      continue;
+    const whilePos = line.indexOf('while');
+    if (whilePos >= 0) {
+      const openParen = line.indexOf('(', whilePos);
+      if (openParen >= 0) {
+        const pc = extractParens(line, openParen);
+        if (pc && pc.cond) {
+          cc++;
+          registerDecision('while', pc.cond, i + 1);
+          const n = addNode('LOOP', `while (${pc.cond})`, i + 1, pc.cond);
+          addEdge(prev, n);
+          const body = addNode('STATEMENT', 'loop_body', i + 1, null);
+          addEdge(n, body, 'true_branch', 'true');
+          addEdge(body, n, 'loop_back');
+          const exit = addNode('STATEMENT', 'while_exit', null, null);
+          addEdge(n, exit, 'false_branch', 'false');
+          prev = exit;
+          continue;
+        }
+      }
     }
 
     // ternary (balanced-scanner): return/val/var/assignment condition ? a : b

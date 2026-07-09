@@ -143,6 +143,35 @@ Source (.java / .xtend)
 - **`mcdc_pairs` table must be populated (was a dead table before M6).**
 - **Extractors produce camelCase IR; ir-ingest.js maps to DB snake_case.**
 
+### Known Issues & Completed Fixes
+
+#### P0 — Fixed
+- **Boolean decomposition + MIXED outcome** — `createDecision` used regex-based `decomposeBoolean` which stripped parens, split on `&&`/`||`, and filtered `p.length > 1` (dropped single-letter conditions). Replaced with AST-based `extractAtoms(tree)` from recursive descent parser. All condition names preserved regardless of length. MIXED operator correctly detected and MC/DC pairs computed via tree evaluation.
+
+#### P1 — Fixed
+- **Field read/write tracking** — `field_accesses` table, Java parser detects `this.x = expr` (write) and `this.field` / `obj.field` (read) via BodyAnalyzer. MCP `get_method_context`/`get_ut_context` include real field_access data. Dedup eliminates false write-then-read for `this.x = expr`.
+- **Exception type on CFG nodes** — `exception_type` column on `cfg_nodes`. Java CST uses `catches` wrapper layer (not direct `catchClause` children), and `catchType` uses `unannClassType` (not `classType`). Both fixed. THROW extracts type after `new` keyword.
+- **Xtend nested ternary** — JS parser + Java extractor both scan line for 2nd `?` after first ternary match, register additional ternary decision, update CC.
+- **Context budget 1800→4000+** — `MAX_CONTEXT_TOKENS=4000`, graduated `truncateContext()` drops source→CFG→calls→decisions in order with truncation flag in response.
+
+#### P2 — Fixed
+- **`else_if` kind for Java** — `_visitIf` detects else-clause-if pattern, emits `else_if` kind (not plain `if`).
+- **Boundary value hints** — `computeBoundaryHints()` in util.js pattern-matches comparisons (`>= N`, `> N`, etc.) against method parameters, included in `get_ut_context`.
+- **Java break/continue CFG** — `_visitBreak`/`_visitContinue` use loop context stack (`_loopStack`) to target correct merge/loophead nodes. Switch also pushes context for break. `_cur = null` after break/continue (terminal path).
+- **Xtend CFG completeness** — for/forEach/while loops now have true_branch→body→loop_back edges (not just false_branch→exit).
+- **Xtend multi-line conditions** — replaced non-greedy regex `(.+?)` with balanced-parenthesis scanner `_extractParens`/`extractParens` that handles nested parens correctly.
+- **Per-method ASIL level** — `asil_level` column on `methods` table (schema v5), migration v4→v5, both parsers extract per-method ASIL from annotation/javadoc, ir-ingest passes through, MCP returns in method contexts.
+- **Truth table cap 8→12** — `buildTruthTable` cap raised 8→12 (2^12=4096 rows), practical limit for in-memory MC/DC pair computation.
+- **Builder robustness** — extractor fallback handles non-object returns (`typeof parsed !== 'object'`), missing `.errors` field (`?? []`).
+
+#### P3 — Not Yet Addressed
+- No lambda/stream support — stream `.filter().map()` logic invisible to CFG
+- No switch expressions (Java 17+ `->` arrow cases)
+- No `dispatch` method support in Xtend parser
+- No Xtend extension method resolution
+- No JML/pre-post condition parsing
+- No requirement/safety-goal traceability table in schema
+
 ### Next work
 - M4/M5 done. Use extractors for new Java/Xtend projects (auto-fallback to JS parsers if Java not available).
 - Implement Xtext/Xtend standalone extractor for production-grade Xtend support (current POC is line-based).
