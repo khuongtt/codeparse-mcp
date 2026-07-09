@@ -230,13 +230,20 @@ const TOOLS = [
 
   {
     name: 'get_ut_context',
-    description: 'Get the complete unit test context for a class or method: class info, all methods with signatures, CFG, MC/DC conditions, call sites for mocking, and field dependencies. This is the primary tool for AI-driven UT generation targeting ISO 26262 ASIL-D compliance with 100% MC/DC + C0 + C1 coverage.',
+    description: 'Get complete UT context for a class/method: class info, methods with signatures, CFG, MC/DC, calls, field deps. Supports pagination (limit/offset) and selective depth flags for large classes. Primary tool for AI-driven ISO 26262 ASIL-D UT generation (100% MC/DC + C0 + C1).',
     inputSchema: {
       type: 'object',
       required: ['qualifiedName'],
       properties: {
         qualifiedName: { type: 'string', description: 'Fully qualified class name' },
-        methodName: { type: 'string', description: 'Optional: focus on a specific method' },
+        methodName: { type: 'string', description: 'Focus on a specific method by name (ignores limit/offset)' },
+        limit: { type: 'number', description: 'Max methods to return (pagination). -1 for all. default 20', default: 20 },
+        offset: { type: 'number', description: 'Method offset for pagination. default 0', default: 0 },
+        include_cfg: { type: 'boolean', description: 'Include CFG nodes/edges per method', default: true },
+        include_source: { type: 'boolean', description: 'Include source code snippet per method', default: false },
+        include_decisions: { type: 'boolean', description: 'Include decisions/conditions', default: true },
+        include_mcdc: { type: 'boolean', description: 'Include MC/DC pairs and truth tables', default: true },
+        include_calls: { type: 'boolean', description: 'Include call sites (mock targets)', default: true },
       },
     },
   },
@@ -740,12 +747,37 @@ async function handleTool(name, args) {
         targetMethods = allMethods.filter(m => m.name === args.methodName);
       }
 
+      // Pagination: default limit 20, offset 0, -1 = all
+      const limit = args.limit !== undefined && args.limit !== null ? args.limit : 20;
+      const offset = args.offset ?? 0;
+      if (!args.methodName && limit >= 0) {
+        targetMethods = targetMethods.slice(offset, offset + limit);
+      }
+
+      // Respect selective depth flags
+      const includeCfg = args.include_cfg !== false;
+      const includeSource = args.include_source === true;
+      const includeDecisions = args.include_decisions !== false;
+      const includeMcdc = args.include_mcdc !== false;
+      const includeCalls = args.include_calls !== false;
+
+      // Precompute aggregates from ALL methods (before pagination slice) to avoid double-queries
+      const allMcdcMap = new Map();
+      for (const m of allMethods) {
+        allMcdcMap.set(m.id, db.getMcdcForMethod(m.id));
+      }
+      const totalMcdcConditions = [...allMcdcMap.values()].reduce((s, arr) => s + arr.length, 0);
+      const estimatedMinTestCases = allMethods.reduce((s, m) => {
+        const mPairs = (allMcdcMap.get(m.id) || []).reduce((sum, c) => sum + (c.mcdcPairs?.length ?? 0), 0);
+        return s + Math.max(m.branch_count, mPairs, 1);
+      }, 0);
+
       const methodContexts = [];
       for (const m of targetMethods) {
-        const cfg = db.getCfgForMethod(m.id);
-        const mcdc = db.getMcdcForMethod(m.id);
-        const decisions = db.getDecisionsForMethod(m.id);
-        const callees = db.getCallees(m.id);
+        const decisions = includeDecisions ? db.getDecisionsForMethod(m.id) : [];
+        const mcdc = includeMcdc ? (allMcdcMap.get(m.id) ?? []) : [];
+        const callees = includeCalls ? db.getCallees(m.id) : [];
+        const cfg = includeCfg ? db.getCfgForMethod(m.id) : null;
 
         const fieldAccesses = db.getFieldAccessesForMethod(m.id);
         const boundaryHints = computeBoundaryHints(decisions, m.parameters ?? []);
@@ -776,36 +808,41 @@ async function handleTool(name, args) {
             line: fa.line,
           })),
           boundary_hints: boundaryHints,
-          decisions: decisions.map(d => ({
-            decision_uid: d.decision_uid,
-            kind: d.kind,
-            line_start: d.line_start,
-            expression: decodeHtmlEntities(d.expression),
-            normalized: decodeHtmlEntities(d.normalized),
-            conditions: (d.conditions || []).map(c => ({
-              condition_uid: c.condition_uid,
-              text: decodeHtmlEntities(c.text),
-              position: c.position,
+          ...(includeDecisions ? {
+            decisions: decisions.map(d => ({
+              decision_uid: d.decision_uid,
+              kind: d.kind,
+              line_start: d.line_start,
+              expression: decodeHtmlEntities(d.expression),
+              normalized: decodeHtmlEntities(d.normalized),
+              conditions: (d.conditions || []).map(c => ({
+                condition_uid: c.condition_uid,
+                text: decodeHtmlEntities(c.text),
+                position: c.position,
+              })),
+              mcdc_required: !!d.mcdc_required,
             })),
-            mcdc_required: !!d.mcdc_required,
-          })),
-          file: m.file,
-          cfg: {
-            node_count: cfg.nodes.length,
-            edge_count: cfg.edges.length,
-            nodes: (cfg.nodes || []).map(n => ({
-              ...n,
-              condition: decodeHtmlEntities(n.condition),
-              label: decodeHtmlEntities(n.label),
+          } : { decisions: [] }),
+          ...(includeCfg && cfg ? {
+            cfg: {
+              node_count: cfg.nodes.length,
+              edge_count: cfg.edges.length,
+              nodes: (cfg.nodes || []).map(n => ({
+                ...n,
+                condition: decodeHtmlEntities(n.condition),
+                label: decodeHtmlEntities(n.label),
+              })),
+              edges: cfg.edges,
+            },
+          } : { cfg: cfg ? { node_count: cfg.nodes.length, edge_count: cfg.edges.length } : null }),
+          ...(includeMcdc ? { mcdc_conditions: decodeMcdcConditions(mcdc) } : { mcdc_conditions: [] }),
+          ...(includeCalls ? {
+            mock_targets: callees.map(c => ({
+              callee_name: c.callee_name,
+              line: c.line,
+              resolved: !!c.callee_id,
             })),
-            edges: cfg.edges,
-          },
-          mcdc_conditions: decodeMcdcConditions(mcdc),
-          mock_targets: callees.map(c => ({
-            callee_name: c.callee_name,
-            line: c.line,
-            resolved: !!c.callee_id,
-          })),
+          } : { mock_targets: [] }),
           coverage_requirements: {
             c0_statement: 'All statements executed',
             c1_branch: `${m.branch_count} branches — true+false for each`,
@@ -842,12 +879,14 @@ async function handleTool(name, args) {
         methods: methodContexts,
         summary: {
           totalMethods: allMethods.length,
+          returnedMethods: methodContexts.length,
           totalBranches: allMethods.reduce((s, m) => s + (m.branch_count ?? 0), 0),
-          totalMcdcConditions: methodContexts.reduce((s, m) => s + m.mcdc_conditions.length, 0),
-          estimatedMinTestCases: methodContexts.reduce((s, m) => {
-            const mcdcPairs = m.mcdc_conditions.reduce((sum, c) => sum + (c.mcdcPairs?.length ?? 0), 0);
-            return s + Math.max(m.branch_count, mcdcPairs, 1);
-          }, 0),
+          totalMcdcConditions,
+          estimatedMinTestCases,
+          pagination: args.methodName ? null : {
+            limit, offset, total: allMethods.length,
+            hasMore: (offset + methodContexts.length) < allMethods.length,
+          },
         },
         recommended_next_actions: recommendedNextActions('get_ut_context', {
           qualifiedName: cls.qualified_name,
