@@ -1,0 +1,143 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "Method-level Decision IR",
+  "description": "Normalized Intermediate Representation for decision/condition data extracted from source code. Used as contract between AST extractors and Graph DB ingest.",
+
+  "type": "object",
+  "required": ["irVersion", "sourceLanguage", "filePath", "classes"],
+
+  "properties": {
+    "irVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "IR schema version (semver)"
+    },
+    "sourceLanguage": {
+      "type": "string",
+      "enum": ["java", "xtend"],
+      "description": "Source language identifier"
+    },
+    "filePath": {
+      "type": "string",
+      "description": "Relative path from project root"
+    },
+    "packageName": {
+      "type": ["string", "null"],
+      "description": "Java package name or null"
+    },
+
+    "classes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "qualifiedName", "kind", "methods"],
+        "properties": {
+          "name":              { "type": "string" },
+          "qualifiedName":     { "type": "string" },
+          "kind":              { "type": "string", "enum": ["class", "interface", "enum", "annotation", "xtend_class"] },
+          "lineStart":         { "type": "integer", "minimum": 1 },
+          "lineEnd":           { "type": ["integer", "null"] },
+          "visibility":        { "type": "string", "enum": ["public", "protected", "private", "package"] },
+          "isAbstract":        { "type": "boolean" },
+          "superclass":        { "type": ["string", "null"] },
+          "interfaces":        { "type": "array", "items": { "type": "string" } },
+          "annotations":       { "type": "array", "items": { "type": "string" } },
+          "javadoc":           { "type": ["string", "null"] },
+          "asilLevel":         { "type": ["string", "null"] },
+
+          "methods": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/method" }
+          }
+        }
+      }
+    }
+  },
+
+  "definitions": {
+    "method": {
+      "type": "object",
+      "required": ["name", "signature", "decisions"],
+      "properties": {
+        "name":                { "type": "string" },
+        "signature":           { "type": "string" },
+        "returnType":          { "type": ["string", "null"] },
+        "visibility":          { "type": "string", "enum": ["public", "protected", "private", "package"] },
+        "lineStart":           { "type": ["integer", "null"], "minimum": 1 },
+        "lineEnd":             { "type": ["integer", "null"] },
+        "cyclomaticComplexity": { "type": "integer", "default": 1, "minimum": 1 },
+        "branchCount":         { "type": "integer", "default": 0, "minimum": 0 },
+        "conditionCount":      { "type": "integer", "default": 0, "minimum": 0 },
+        "isStatic":            { "type": "boolean" },
+        "isAbstract":          { "type": "boolean" },
+        "isOverride":          { "type": "boolean" },
+        "asilLevel":           { "type": ["string", "null"] },
+        "annotations":         { "type": "array", "items": { "type": "string" } },
+        "parameters":          { "type": "array" },
+
+        "decisions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/decision" }
+        },
+
+        "cfg": {
+          "type": "object",
+          "properties": {
+            "nodes": { "type": "array" },
+            "edges": { "type": "array" }
+          }
+        },
+
+        "calls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "calleeName": { "type": "string" },
+              "line":       { "type": ["integer", "null"] }
+            }
+          }
+        }
+      }
+    },
+
+    "decision": {
+      "type": "object",
+      "required": ["kind", "expression", "branchCount"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["if", "else_if", "template_if", "template_elseif", "ternary",
+                   "for", "foreach", "while", "do_while", "switch", "case", "catch"],
+          "description": "Decision kind — branch point type"
+        },
+        "expression":  { "type": "string", "description": "Full boolean expression text" },
+        "normalized":  { "type": "string", "description": "Normalized form (C1 && C2, etc.)" },
+        "operator":    { "type": ["string", "null"], "enum": ["AND", "OR", "MIXED", null] },
+        "lineStart":   { "type": ["integer", "null"], "minimum": 1 },
+        "lineEnd":     { "type": ["integer", "null"] },
+        "branchCount": { "type": "integer", "minimum": 2 },
+        "mcdcRequired": { "type": "boolean", "description": "True when conditions.length >= 2" },
+        "parseStatus": { "type": "string", "enum": ["ok", "warning", "error"] },
+
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/condition" }
+        }
+      }
+    },
+
+    "condition": {
+      "type": "object",
+      "required": ["position", "text"],
+      "properties": {
+        "position":      { "type": "integer", "minimum": 1 },
+        "text":          { "type": "string" },
+        "normalizedText": { "type": ["string", "null"] },
+        "conditionType": { "type": "string", "enum": ["atomic", "negated"] },
+        "parseStatus":   { "type": "string", "enum": ["ok", "warning", "error"] }
+      }
+    }
+  }
+}

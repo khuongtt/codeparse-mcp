@@ -1,0 +1,403 @@
+{
+  "packageName": "com.example",
+  "classes": [
+    {
+      "name": "SampleXtend",
+      "kind": "xtend_class",
+      "methods": [
+        {
+          "name": "classify",
+          "signature": "classify(int):String",
+          "cyclomaticComplexity": 3,
+          "branchCount": 4,
+          "conditionCount": 2,
+          "decisions": [
+            {
+              "kind": "if",
+              "expression": "value > 0",
+              "normalized": "value > 0",
+              "operator": null,
+              "lineStart": 2,
+              "branchCount": 2,
+              "mcdcRequired": false,
+              "conditions": [
+                {
+                  "text": "value > 0",
+                  "normalizedText": "value > 0",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            },
+            {
+              "kind": "else_if",
+              "expression": "value == 0",
+              "normalized": "value == 0",
+              "operator": null,
+              "lineStart": 3,
+              "branchCount": 2,
+              "mcdcRequired": false,
+              "conditions": [
+                {
+                  "text": "value == 0",
+                  "normalizedText": "value == 0",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            }
+          ],
+          "booleanConditions": [
+            "value > 0",
+            "value == 0"
+          ],
+          "cfgNodeCount": 7,
+          "cfgEdgeCount": 8,
+          "callSiteCount": 1,
+          "mcdcConditionCount": 0
+        },
+        {
+          "name": "sumEven",
+          "signature": "sumEven(List<Integer>):int",
+          "cyclomaticComplexity": 3,
+          "branchCount": 4,
+          "conditionCount": 2,
+          "decisions": [
+            {
+              "kind": "foreach",
+              "expression": "iterate:i",
+              "normalized": "iterate:i",
+              "operator": null,
+              "lineStart": 3,
+              "branchCount": 2,
+              "mcdcRequired": false,
+              "conditions": [
+                {
+                  "text": "iterate:i",
+                  "normalizedText": "iterate:i",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            },
+            {
+              "kind": "if",
+              "expression": "i % 2 == 0",
+              "normalized": "i % 2 == 0",
+              "operator": null,
+              "lineStart": 4,
+              "branchCount": 2,
+              "mcdcRequired": false,
+              "conditions": [
+                {
+                  "text": "i % 2 == 0",
+                  "normalizedText": "i % 2 == 0",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            }
+          ],
+          "booleanConditions": [
+            "iterate:i",
+            "i % 2 == 0"
+          ],
+          "cfgNodeCount": 7,
+          "cfgEdgeCount": 7,
+          "callSiteCount": 1,
+          "mcdcConditionCount": 0
+        },
+        {
+          "name": "isInRange",
+          "signature": "isInRange(int,int,int):boolean",
+          "cyclomaticComplexity": 1,
+          "branchCount": 2,
+          "conditionCount": 2,
+          "decisions": [
+            {
+              "kind": "ternary",
+              "expression": "(x >= min && x <= max)",
+              "normalized": "C1 && C2",
+              "operator": "AND",
+              "lineStart": 2,
+              "branchCount": 2,
+              "mcdcRequired": true,
+              "conditions": [
+                {
+                  "text": "x >= min",
+                  "normalizedText": "x >= min",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                },
+                {
+                  "text": "x <= max",
+                  "normalizedText": "x <= max",
+                  "position": 2,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            }
+          ],
+          "booleanConditions": [
+            "(x >= min && x <= max)"
+          ],
+          "cfgNodeCount": 5,
+          "cfgEdgeCount": 5,
+          "callSiteCount": 1,
+          "mcdcConditionCount": 0
+        },
+        {
+          "name": "grade",
+          "signature": "grade(int):String",
+          "cyclomaticComplexity": 5,
+          "branchCount": 8,
+          "conditionCount": 8,
+          "decisions": [
+            {
+              "kind": "if",
+              "expression": "score >= 90 && score <= 100",
+              "normalized": "C1 && C2",
+              "operator": "AND",
+              "lineStart": 2,
+              "branchCount": 2,
+              "mcdcRequired": true,
+              "conditions": [
+                {
+                  "text": "score >= 90",
+                  "normalizedText": "score >= 90",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                },
+                {
+                  "text": "score <= 100",
+                  "normalizedText": "score <= 100",
+                  "position": 2,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            },
+            {
+              "kind": "else_if",
+              "expression": "score >= 80 && score < 90",
+              "normalized": "C1 && C2",
+              "operator": "AND",
+              "lineStart": 3,
+              "branchCount": 2,
+              "mcdcRequired": true,
+              "conditions": [
+                {
+                  "text": "score >= 80",
+                  "normalizedText": "score >= 80",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                },
+                {
+                  "text": "score < 90",
+                  "normalizedText": "score < 90",
+                  "position": 2,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            },
+            {
+              "kind": "else_if",
+              "expression": "score >= 70 && score < 80",
+              "normalized": "C1 && C2",
+              "operator": "AND",
+              "lineStart": 4,
+              "branchCount": 2,
+              "mcdcRequired": true,
+              "conditions": [
+                {
+                  "text": "score >= 70",
+                  "normalizedText": "score >= 70",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                },
+                {
+                  "text": "score < 80",
+                  "normalizedText": "score < 80",
+                  "position": 2,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            },
+            {
+              "kind": "else_if",
+              "expression": "score >= 60 && score < 70",
+              "normalized": "C1 && C2",
+              "operator": "AND",
+              "lineStart": 5,
+              "branchCount": 2,
+              "mcdcRequired": true,
+              "conditions": [
+                {
+                  "text": "score >= 60",
+                  "normalizedText": "score >= 60",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                },
+                {
+                  "text": "score < 70",
+                  "normalizedText": "score < 70",
+                  "position": 2,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            }
+          ],
+          "booleanConditions": [
+            "score >= 90 && score <= 100",
+            "score >= 80 && score < 90",
+            "score >= 70 && score < 80",
+            "score >= 60 && score < 70"
+          ],
+          "cfgNodeCount": 11,
+          "cfgEdgeCount": 14,
+          "callSiteCount": 1,
+          "mcdcConditionCount": 0
+        },
+        {
+          "name": "formatLabel",
+          "signature": "formatLabel(String,int):String",
+          "cyclomaticComplexity": 3,
+          "branchCount": 4,
+          "conditionCount": 2,
+          "decisions": [
+            {
+              "kind": "template_if",
+              "expression": "count > 0",
+              "normalized": "count > 0",
+              "operator": null,
+              "lineStart": 3,
+              "branchCount": 2,
+              "mcdcRequired": false,
+              "conditions": [
+                {
+                  "text": "count > 0",
+                  "normalizedText": "count > 0",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            },
+            {
+              "kind": "template_elseif",
+              "expression": "count == 0",
+              "normalized": "count == 0",
+              "operator": null,
+              "lineStart": 5,
+              "branchCount": 2,
+              "mcdcRequired": false,
+              "conditions": [
+                {
+                  "text": "count == 0",
+                  "normalizedText": "count == 0",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            }
+          ],
+          "booleanConditions": [
+            "count > 0",
+            "count == 0"
+          ],
+          "cfgNodeCount": 10,
+          "cfgEdgeCount": 11,
+          "callSiteCount": 2,
+          "mcdcConditionCount": 0
+        },
+        {
+          "name": "sign",
+          "signature": "sign(int):int",
+          "cyclomaticComplexity": 1,
+          "branchCount": 2,
+          "conditionCount": 1,
+          "decisions": [
+            {
+              "kind": "ternary",
+              "expression": "(x > 0)",
+              "normalized": "(x > 0)",
+              "operator": null,
+              "lineStart": 2,
+              "branchCount": 2,
+              "mcdcRequired": false,
+              "conditions": [
+                {
+                  "text": "x > 0",
+                  "normalizedText": "x > 0",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
+            }
+          ],
+          "booleanConditions": [
+            "(x > 0)"
+          ],
+          "cfgNodeCount": 5,
+          "cfgEdgeCount": 5,
+          "callSiteCount": 1,
+          "mcdcConditionCount": 0
+        },
+        {
+          "name": "process",
+          "signature": "process(String):void",
+          "cyclomaticComplexity": 1,
+          "branchCount": 0,
+          "conditionCount": 0,
+          "decisions": [],
+          "booleanConditions": [],
+          "cfgNodeCount": 4,
+          "cfgEdgeCount": 3,
+          "callSiteCount": 2,
+          "mcdcConditionCount": 0
+        },
+        {
+          "name": "doSomething",
+          "signature": "doSomething(String):void",
+          "cyclomaticComplexity": 1,
+          "branchCount": 0,
+          "conditionCount": 0,
+          "decisions": [],
+          "booleanConditions": [],
+          "cfgNodeCount": 4,
+          "cfgEdgeCount": 3,
+          "callSiteCount": 2,
+          "mcdcConditionCount": 0
+        }
+      ]
+    }
+  ],
+  "errors": []
+}

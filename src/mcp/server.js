@@ -48,7 +48,7 @@ const db = new GraphDatabase(config.dbPath);
 db.open();
 
 const server = new Server(
-  { name: 'codeparse-mcp', version: '2.5.0' },
+  { name: 'codeparse-mcp', version: '3.0.0' },
   { capabilities: { tools: {} } }
 );
 

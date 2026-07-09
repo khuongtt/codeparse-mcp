@@ -8,7 +8,7 @@
 // For CFG/MC/DC, we re-use the same BodyAnalyzer from java-parser after
 // normalizing Xtend expressions to an analyzable form.
 
-import { decomposeBoolean, buildTruthTable, computeMcdcPairs, createDecision } from './java-parser.js';
+import { createDecision } from './java-parser.js';
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -449,7 +449,7 @@ function analyzeXtendBody(bodyText) {
     cfgEdges.push({ fromNode: f, toNode: t, edgeType: type, condition: cond });
   };
 
-  // Helper to register a decision with atomic conditions and MC/DC
+  // Helper to register a decision (v3 IR camelCase, MC/DC centralized in M6)
   const registerDecision = (kind, expr, line) => {
     if (!expr) return;
     booleanConditions.push(expr);
@@ -458,19 +458,6 @@ function analyzeXtendBody(bodyText) {
     if (dec) {
       decisions.push(dec);
       conditionCount += dec.conditions.length;
-
-      // MC/DC for compound conditions
-      if (dec.conditions.length >= 2) {
-        const subConds = dec.conditions.map(c => c.normalized);
-        const tt = buildTruthTable(subConds);
-        mcdcConditions.push({
-          expression: expr,
-          subConditions: subConds,
-          truthTable: tt,
-          mcdcPairs: computeMcdcPairs(subConds, tt),
-          decisionSeq: decisions.length,
-        });
-      }
     }
   };
 
@@ -478,6 +465,65 @@ function analyzeXtendBody(bodyText) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
+
+    // template IF («IF ...»)
+    const tmplIfMatch = line.match(/^«IF\s+(.+?)»/);
+    if (tmplIfMatch) {
+      cc++;
+      registerDecision('template_if', tmplIfMatch[1], i + 1);
+      const n = addNode('BRANCH', `«IF ${tmplIfMatch[1]}»`, i + 1, tmplIfMatch[1]);
+      addEdge(prev, n);
+      const merge = addNode('STATEMENT', 'tmpl_if_merge', null, null);
+      addEdge(n, merge, 'true_branch', 'true');
+      addEdge(n, merge, 'false_branch', 'false');
+      prev = merge;
+      continue;
+    }
+
+    // template ELSEIF («ELSEIF ...»)
+    const tmplElseIfMatch = line.match(/^«ELSEIF\s+(.+?)»/);
+    if (tmplElseIfMatch) {
+      cc++;
+      registerDecision('template_elseif', tmplElseIfMatch[1], i + 1);
+      const n = addNode('BRANCH', `«ELSEIF ${tmplElseIfMatch[1]}»`, i + 1, tmplElseIfMatch[1]);
+      addEdge(prev, n);
+      const merge = addNode('STATEMENT', 'tmpl_elseif_merge', null, null);
+      addEdge(n, merge, 'true_branch', 'true');
+      addEdge(n, merge, 'false_branch', 'false');
+      prev = merge;
+      continue;
+    }
+
+    // template ELSE («ELSE»)
+    if (line.startsWith('«ELSE»')) {
+      // else in template — no new decision, just a CFG branch indicator
+      const n = addNode('STATEMENT', '«ELSE»', i + 1, null);
+      addEdge(prev, n);
+      prev = n;
+      continue;
+    }
+
+    // template ENDIF («ENDIF»)
+    if (line.startsWith('«ENDIF»')) {
+      const n = addNode('STATEMENT', '«ENDIF»', i + 1, null);
+      addEdge(prev, n);
+      prev = n;
+      continue;
+    }
+
+    // else-if expression
+    const elseIfMatch = line.match(/^else\s+if\s*\((.+?)\)/);
+    if (elseIfMatch) {
+      cc++;
+      registerDecision('else_if', elseIfMatch[1], i + 1);
+      const n = addNode('BRANCH', `else if (${elseIfMatch[1]})`, i + 1, elseIfMatch[1]);
+      addEdge(prev, n);
+      const merge = addNode('STATEMENT', 'else_if_merge', null, null);
+      addEdge(n, merge, 'true_branch', 'true');
+      addEdge(n, merge, 'false_branch', 'false');
+      prev = merge;
+      continue;
+    }
 
     // if expression
     const ifMatch = line.match(/^if\s*\((.+?)\)/);
@@ -494,11 +540,15 @@ function analyzeXtendBody(bodyText) {
       continue;
     }
 
-    // for/forEach
+    // for/forEach iteration
     const forMatch = line.match(/^(?:for|forEach)\s*[\(\[]/);
     if (forMatch) {
       cc++;
-      const n = addNode('LOOP', line.slice(0, 60), i + 1, null);
+      // Extract loop variable name as 'condition' text
+      const varMatch = line.match(/^for\s*\((\w+)/);
+      const loopVar = varMatch ? `iterate:${varMatch[1]}` : 'for-each';
+      registerDecision('foreach', loopVar, i + 1);
+      const n = addNode('LOOP', line.slice(0, 60), i + 1, loopVar);
       addEdge(prev, n);
       const exit = addNode('STATEMENT', 'loop_exit', null, null);
       addEdge(n, exit, 'false_branch', 'false');
@@ -518,6 +568,36 @@ function analyzeXtendBody(bodyText) {
       addEdge(n, exit, 'false_branch', 'false');
       prev = exit;
       continue;
+    }
+
+    // ternary (balanced-scanner): return/val/var/assignment condition ? a : b
+    const ternaryMatch = line.match(/(?:return|val|var|\w+\s*=)\s*(.*?)\s*\?\s/);
+    if (ternaryMatch) {
+      // Extract condition text before '?'
+      const condCandidate = ternaryMatch[1];
+      // Pick the rightmost top-level expression before '?'
+      let depth = 0, condEnd = -1;
+      for (let c = condCandidate.length - 1; c >= 0; c--) {
+        if (condCandidate[c] === ')') depth++;
+        if (condCandidate[c] === '(') depth--;
+        if (depth === 0 && (condCandidate[c] === '(' || /\w/.test(condCandidate[c]))) {
+          condEnd = c;
+          break;
+        }
+      }
+      const cond = condEnd >= 0
+        ? condCandidate.slice(condEnd).trim()
+        : condCandidate.trim();
+      if (cond) {
+        registerDecision('ternary', cond, i + 1);
+        const n = addNode('BRANCH', `ternary: ${cond}`, i + 1, cond);
+        addEdge(prev, n);
+        const merge = addNode('STATEMENT', 'ternary_merge', null, null);
+        addEdge(n, merge, 'true_branch', 'true');
+        addEdge(n, merge, 'false_branch', 'false');
+        prev = merge;
+        continue;
+      }
     }
 
     // switch
@@ -565,14 +645,17 @@ function analyzeXtendBody(bodyText) {
       continue;
     }
 
-    // method call
-    const callMatch = line.match(/(\w+(?:\.\w+)*)\s*\(/);
-    if (callMatch && !line.startsWith('//')) {
-      const callee = callMatch[1];
-      callSites.push({ calleeName: callee, line: i + 1 });
-      const n = addNode('STATEMENT', `call: ${callee}`, i + 1, null);
-      addEdge(prev, n);
-      prev = n;
+    // method call — avoid false positives on keywords and method decl signatures
+    const XTEND_KEYWORDS = new Set(['if', 'else', 'for', 'while', 'switch', 'case', 'return', 'throw', 'try', 'catch']);
+    if (!line.startsWith('//') && line.includes('(')) {
+      const callMatch = line.match(/(\w+(?:\.\w+)*)\s*\(/);
+      if (callMatch && !XTEND_KEYWORDS.has(callMatch[1])) {
+        const callee = callMatch[1];
+        callSites.push({ calleeName: callee, line: i + 1 });
+        const n = addNode('STATEMENT', `call: ${callee}`, i + 1, null);
+        addEdge(prev, n);
+        prev = n;
+      }
     }
   }
 

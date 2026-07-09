@@ -3,10 +3,10 @@
 // Node names verified against actual CST output.
 
 import { parse as javaParse } from 'java-parser';
-import { decomposeBoolean, buildTruthTable, computeMcdcPairs, createDecision } from './decision-utils.js';
+import { createDecision } from './decision-utils.js';
 
-// Re-export for Xtend parser which imports these from java-parser
-export { decomposeBoolean, buildTruthTable, computeMcdcPairs, createDecision };
+// Re-export for Xtend parser which imports createDecision from here
+export { createDecision };
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -471,6 +471,7 @@ class BodyAnalyzer {
       case 'returnStatement': this._visitReturn(node); return;
       case 'throwStatement': this._visitThrow(node); return;
       case 'statementExpression': this._visitStatementExpr(node); return;
+      case 'conditionalExpression': this._visitConditionalExpr(node); return;
     }
     if (node.children) for (const arr of Object.values(node.children)) for (const c of arr) this._visitNode(c);
   }
@@ -627,6 +628,9 @@ class BodyAnalyzer {
   }
 
   _visitReturn(node) {
+    // Recurse into expression children to detect decisions (ternary, etc.)
+    const exprChildren = node.children?.expression ?? [];
+    for (const expr of exprChildren) this._visitNode(expr);
     const retId = this._addNode('RETURN', 'return', lineOf(node), null);
     this._addEdge(this._cur, retId);
     this._cur = retId;
@@ -675,8 +679,8 @@ class BodyAnalyzer {
 
   /**
    * Register a decision with its boolean expression.
-   * Creates a decision object with atomic conditions and (for compound conditions)
-   * MC/DC truth table and independence pairs.
+   * Creates a IR-shaped decision object (camelCase). MC/DC pair computation
+   * is centralized in ir-ingest.js (M6) — only condition decomposition here.
    */
   _registerDecision(kind, expression, line) {
     if (!expression) return;
@@ -687,20 +691,53 @@ class BodyAnalyzer {
     if (decision) {
       this._decisions.push(decision);
       this._condCount += decision.conditions.length;
-
-      // MC/DC for compound conditions
-      if (decision.conditions.length >= 2) {
-        const subConds = decision.conditions.map(c => c.normalized);
-        const tt = buildTruthTable(subConds);
-        this._mcdc.push({
-          expression,
-          subConditions: subConds,
-          truthTable: tt,
-          mcdcPairs: computeMcdcPairs(subConds, tt),
-          decisionSeq: this._decisions.length,
-        });
-      }
     }
+  }
+
+  /**
+   * Handle ternary expressions (ConditionalExpr): condition ? trueVal : falseVal
+   * CST: binaryExpression ? expression : expression
+   * Recurses into true/false branches to support nested ternary.
+   */
+  _visitConditionalExpr(node) {
+    const children = node.children ?? {};
+    const condNode = children.binaryExpression?.[0];
+
+    if (!condNode || !children.Colon) {
+      for (const arr of Object.values(children)) {
+        for (const c of arr) this._visitNode(c);
+      }
+      return;
+    }
+
+    // Extract condition text
+    const condText = allTokenImages(condNode).join(' ').slice(0, 200);
+    if (condText) {
+      this._registerDecision('ternary', condText, lineOf(node));
+    }
+    this._cc++;
+
+    const branchId = this._addNode('BRANCH', `ternary: ${condText}`, lineOf(node), condText || null);
+    this._addEdge(this._cur, branchId);
+
+    // True branch — recuse into true expression (index 1 in children)
+    const trueExpr = children.expression?.[1];
+    if (trueExpr) {
+      this._cur = branchId;
+      this._visitNode(trueExpr);
+    }
+    const mergeId = this._addNode('STATEMENT', 'ternary_merge', null, null);
+    this._addEdge(this._cur, mergeId, 'true_branch', 'true');
+
+    // False branch — recuse into false expression (index 2 in children)
+    const falseExpr = children.expression?.[2];
+    if (falseExpr) {
+      this._cur = branchId;
+      this._visitNode(falseExpr);
+    }
+    this._addEdge(this._cur, mergeId, 'false_branch', 'false');
+
+    this._cur = mergeId;
   }
 
   result() {

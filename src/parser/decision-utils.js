@@ -40,14 +40,27 @@ export function buildTruthTable(subConds) {
 }
 
 /**
- * Compute MC/DC independence pairs from a truth table.
+ * Compute true MC/DC independence pairs from a truth table.
+ * Only returns pairs where outcomes differ (true independence).
+ * Uses operator-aware outcome evaluation: AND = all true, OR = any true.
+ *
  * @param {string[]} subConds
  * @param {object[]} truthTable
+ * @param {string} [operator] — 'AND' | 'OR' | 'MIXED' | null
  * @returns {object[]|null}
  */
-export function computeMcdcPairs(subConds, truthTable) {
+export function computeMcdcPairs(subConds, truthTable, operator = null) {
   if (!truthTable) return null;
   const pairs = [];
+
+  const outcome = (row) => {
+    const vals = subConds.map(c => row[c]);
+    if (operator === 'AND') return vals.every(Boolean) ? 1 : 0;
+    if (operator === 'OR') return vals.some(Boolean) ? 1 : 0;
+    // Default: first condition decides
+    return vals[0] ? 1 : 0;
+  };
+
   for (let i = 0; i < subConds.length; i++) {
     const cond = subConds[i];
     let found = false;
@@ -55,7 +68,10 @@ export function computeMcdcPairs(subConds, truthTable) {
       for (let b = a + 1; b < truthTable.length && !found; b++) {
         const onlyI = subConds.every((c, j) => j === i || truthTable[a][c] === truthTable[b][c])
                    && truthTable[a][cond] !== truthTable[b][cond];
-        if (onlyI) { pairs.push({ condition: cond, rowA: a, rowB: b }); found = true; }
+        if (onlyI && outcome(truthTable[a]) !== outcome(truthTable[b])) {
+          pairs.push({ condition: cond, rowA: a, rowB: b });
+          found = true;
+        }
       }
     }
   }
@@ -71,8 +87,8 @@ export function computeMcdcPairs(subConds, truthTable) {
  */
 function detectOperator(expr) {
   if (!expr) return null;
-  const hasAnd = /\b&&\b/.test(expr);
-  const hasOr = /\b\|\|\b/.test(expr);
+  const hasAnd = /&&/.test(expr);
+  const hasOr = /\|\|/.test(expr);
   if (hasAnd && hasOr) return 'MIXED';
   if (hasAnd) return 'AND';
   if (hasOr) return 'OR';
@@ -109,27 +125,26 @@ function buildNormalized(count, operator) {
 }
 
 /**
- * Create a decision object from a boolean expression.
+ * Create a Decision IR (camelCase) decision object from a boolean expression.
+ * This is the v3 IR shape — used as the contract between parsers/extractors and DB ingest.
  *
- * @param {string} kind    — decision kind: if|while|for|do|switch|ternary|return|assignment
+ * @param {string} kind    — decision kind: if|while|for|do|switch|ternary|...
  * @param {string} expression — full boolean expression text
  * @param {number|null} line  — source line number
  * @returns {object|null} decision object with { kind, expression, normalized, operator,
- *          line_start, branch_count: 2, mcdc_required, conditions, parse_status }
+ *          lineStart, lineEnd, branchCount, mcdcRequired, conditions, parseStatus }
  */
 export function createDecision(kind, expression, line) {
   if (!expression) return null;
 
-  // Decompose into atomic sub-conditions
   const atomicTexts = decomposeBoolean(expression);
 
-  // Build condition objects — use original text before normalizeConditionText strips !
   const conditions = atomicTexts.map((text, i) => ({
-    text: text,
-    normalized: normalizeConditionText(text),
+    text,
+    normalizedText: normalizeConditionText(text),
     position: i + 1,
-    condition_type: detectConditionType(text),
-    parse_status: 'ok',
+    conditionType: detectConditionType(text),
+    parseStatus: 'ok',
   }));
 
   const operator = detectOperator(expression);
@@ -142,10 +157,11 @@ export function createDecision(kind, expression, line) {
     expression,
     normalized,
     operator,
-    line_start: line,
-    branch_count: 2,
-    mcdc_required: conditions.length >= 2,
+    lineStart: line,
+    lineEnd: line,
+    branchCount: 2,
+    mcdcRequired: conditions.length >= 2,
     conditions,
-    parse_status: 'ok',
+    parseStatus: 'ok',
   };
 }

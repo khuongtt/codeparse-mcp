@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "File-level IR Manifest",
+  "description": "Compact module/file-level index referencing method-level IR artifacts.",
+  "type": "object",
+  "required": ["irVersion", "projectRoot", "files"],
+  "properties": {
+    "irVersion": { "type": "string" },
+    "projectRoot": { "type": "string" },
+    "generatedAt": { "type": "string" },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "fileCount":    { "type": "integer" },
+        "classCount":   { "type": "integer" },
+        "methodCount":  { "type": "integer" },
+        "decisionCount": { "type": "integer" },
+        "branchCount":  { "type": "integer" },
+        "mcdcPairCount": { "type": "integer" },
+        "errorCount":   { "type": "integer" }
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path":       { "type": "string" },
+          "lang":       { "type": "string" },
+          "classes":    { "type": "array", "items": { "type": "string" } },
+          "methodCount": { "type": "integer" },
+          "irFile":     { "type": "string" }
+        }
+      }
+    }
+  }
+}

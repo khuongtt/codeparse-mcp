@@ -88,6 +88,9 @@ Environment variables for Docker: `CODEPARSE_PROJECT_ROOT`, `CODEPARSE_DB_PATH`.
 - `src/import/jacoco-importer.js` — JaCoCo XML coverage parser (v2.5)
 - `src/export/evidence-excel.js` — xlsx workbook builders for evidence package (v2.5)
 - `src/export/evidence-writer.js` — Evidence package orchestrator (v2.5)
+- `extractors/java/` — Java AST extractor (JavaParser + CfgBuilder, `run-extractor.sh`)
+- `extractors/xtend/` — Xtend AST extractor (line-based parser, `run-extractor.sh`)
+- `src/extractor/run-extractor.js` — Invokes Java extractors, fallback to JS parsers
 
 ## MCP Tools (v2.5.0)
 
@@ -105,3 +108,43 @@ Decisions (branch points) use UID format `D-{methodId}-{seq}`, conditions use `C
 | `export_evidence_plan` | **New v2.5** — Generate 10-file ISO 26262 evidence package (decision list, MC/DC matrix, test mapping, traceability, audit summary, etc.). |
 
 See the tool definitions in `src/mcp/server.js` for the full list with input schemas (17 tools total).
+
+## v3 Architecture Upgrade Status
+
+**Target architecture:** AST Extractor → Normalized Decision IR → Graph DB → MCP Evidence → AI reads MCP only
+
+```
+Source (.java / .xtend)
+  → (M4/M5) AST Extractor (Java CLI tool) OR (M2) Fallback parser
+  → Decision IR JSON
+  → (M6) ir-ingest.js → Graph DB
+  → (M7) MCP evidence tools
+  → AI reads MCP only
+```
+
+### Phase completion
+
+| Phase | Status | Description |
+|---|---|---|
+| M0 | Done | Freeze regression baseline — `tests/parser-regression/` with fixtures, expected JSON, test runner |
+| M1 | Done | Define Decision IR schema — `src/ir/schemas/method-ir.schema.json`, `src/ir/templates/`, `src/ir/validate-ir.js` |
+| M2 | Done | Refactor parsers to emit camelCase IR shape — `decision-utils.js`, `java-parser.js`, `xtend-parser.js`, `builder.js` |
+| M3 | Done | Add ternary support — `ConditionalExpr` handler (Java) + regex (Xtend) |
+| M4 | Done | JavaParser AST extractor POC — `extractors/java/` with CfgBuilder, IR output, regression tests |
+| M5 | Done | Xtend AST extractor POC — `extractors/xtend/` line-based parser, template_if/elseif, ternary, regression tests |
+| M6 | Done | Centralized IR ingest — `src/graph/ir-ingest.js`, builder.js refactor, MC/DC centralized, `mcdc_pairs` populated |
+| M7 | Done | MCP regression — 17/17 tests pass, 20 valid MC/DC pairs (0 invalid), 6 ternary decisions (incl. nested), else_if + template IF/ELSEIF detection |
+| M8 | Done | Update docs — CLAUDE.md, architecture description, rules |
+
+### Key rules
+- **Full IR is extractor-to-DB ingest input, NOT an AI input.**
+- **AI must never read raw IR JSON files for UT generation — use MCP scoped evidence only.**
+- **MC/DC pair generation is centralized in ir-ingest.js (not duplicated in parsers).**
+- **`mcdc_pairs` table must be populated (was a dead table before M6).**
+- **Extractors produce camelCase IR; ir-ingest.js maps to DB snake_case.**
+
+### Next work
+- M4/M5 done. Use extractors for new Java/Xtend projects (auto-fallback to JS parsers if Java not available).
+- Implement Xtext/Xtend standalone extractor for production-grade Xtend support (current POC is line-based).
+- Add `tests/extractor-regression/` to CI pipeline.
+- Build MCP tools for comparing extractor output against JS parser baseline.

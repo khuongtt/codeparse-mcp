@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "File-level IR",
+  "description": "Full file-level debug/review artifact containing package/class tree and references to method IRs.",
+  "type": "object",
+  "required": ["irVersion", "sourceLanguage", "filePath", "classes"],
+  "properties": {
+    "irVersion": { "type": "string" },
+    "sourceLanguage": { "type": "string" },
+    "filePath": { "type": "string" },
+    "packageName": { "type": ["string", "null"] },
+    "extractorInfo": {
+      "type": "object",
+      "properties": {
+        "extractor": { "type": "string" },
+        "version": { "type": "string" },
+        "durationMs": { "type": "integer" }
+      }
+    },
+    "classes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "qualifiedName": { "type": "string" },
+          "kind": { "type": "string" },
+          "methodCount": { "type": "integer" },
+          "methodIrRefs": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

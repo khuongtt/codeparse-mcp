@@ -1,0 +1,14 @@
+{
+  "projectRoot": "/home/kaj/codeparse-mcp",
+  "dbPath": "/home/kaj/codeparse-mcp/.codeparse/graph.db",
+  "include": [
+    "**/*.java",
+    "**/*.xtend"
+  ],
+  "exclude": [
+    "**/node_modules/**",
+    "**/build/**",
+    "**/target/**",
+    "**/.gradle/**"
+  ]
+}

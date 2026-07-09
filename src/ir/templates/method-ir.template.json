@@ -1,0 +1,70 @@
+{
+  "irVersion": "1.0",
+  "sourceLanguage": "java",
+  "filePath": "com/example/SampleClass.java",
+  "packageName": "com.example",
+  "classes": [
+    {
+      "name": "SampleClass",
+      "qualifiedName": "com.example.SampleClass",
+      "kind": "class",
+      "lineStart": 1,
+      "lineEnd": 50,
+      "visibility": "public",
+      "isAbstract": false,
+      "superclass": null,
+      "interfaces": [],
+      "annotations": [],
+      "methods": [
+        {
+          "name": "sampleMethod",
+          "signature": "sampleMethod(int):String",
+          "returnType": "String",
+          "visibility": "public",
+          "lineStart": 10,
+          "lineEnd": 25,
+          "cyclomaticComplexity": 3,
+          "branchCount": 4,
+          "conditionCount": 3,
+          "isStatic": false,
+          "isAbstract": false,
+          "isOverride": false,
+          "annotations": [],
+          "parameters": [{ "name": "x", "type": "int" }],
+          "decisions": [
+            {
+              "kind": "if",
+              "expression": "x > 0 && x < 100",
+              "normalized": "C1 && C2",
+              "operator": "AND",
+              "lineStart": 11,
+              "lineEnd": 11,
+              "branchCount": 2,
+              "mcdcRequired": true,
+              "parseStatus": "ok",
+              "conditions": [
+                { "position": 1, "text": "x > 0", "normalizedText": "x > 0", "conditionType": "atomic", "parseStatus": "ok" },
+                { "position": 2, "text": "x < 100", "normalizedText": "x < 100", "conditionType": "atomic", "parseStatus": "ok" }
+              ]
+            }
+          ],
+          "cfg": {
+            "nodes": [
+              { "id": 1, "nodeType": "ENTRY", "label": "entry" },
+              { "id": 2, "nodeType": "BRANCH", "label": "if (x > 0 && x < 100)", "line": 11 },
+              { "id": 3, "nodeType": "STATEMENT", "label": "stmt", "line": 11 },
+              { "id": 4, "nodeType": "EXIT", "label": "exit" }
+            ],
+            "edges": [
+              { "fromNode": 1, "toNode": 2, "edgeType": "sequential" },
+              { "fromNode": 2, "toNode": 3, "edgeType": "true_branch", "condition": "true" },
+              { "fromNode": 2, "toNode": 4, "edgeType": "false_branch", "condition": "false" },
+              { "fromNode": 3, "toNode": 4, "edgeType": "sequential" }
+            ]
+          },
+          "calls": []
+        }
+      ]
+    }
+  ]
+}

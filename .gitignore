@@ -5,3 +5,6 @@ node_modules/
 *.db-shm
 .env
 dist/
+extractors/*/target/
+extractors/java/.mvn/wrapper/maven-wrapper.jar
+

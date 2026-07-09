@@ -1,5 +1,6 @@
 // src/graph/builder.js
-// Orchestrates parsing and writing graph data to SQLite
+// Orchestrates parsing and writing graph data to SQLite.
+// After v3 refactor: scans files, dispatches parsers, delegates DB writes to ir-ingest.js.
 
 import { readFileSync, existsSync } from 'fs';
 import { relative, extname, resolve } from 'path';
@@ -7,6 +8,8 @@ import { globSync } from 'glob';
 import { GraphDatabase, sha256 } from '../db/database.js';
 import { parseJava } from '../parser/java-parser.js';
 import { parseXtend } from '../parser/xtend-parser.js';
+import { IrIngest } from './ir-ingest.js';
+import { runExtractor } from '../extractor/run-extractor.js';
 
 export class GraphBuilder {
   /**
@@ -54,8 +57,9 @@ export class GraphBuilder {
     }
 
     report.scanned = files.length;
+    const ingest = new IrIngest(this.db);
 
-    // Parse each file in a single transaction per file
+    // Parse each file
     for (let i = 0; i < files.length; i++) {
       const absPath = files[i];
       const relPath = relative(this.projectRoot, absPath);
@@ -73,148 +77,37 @@ export class GraphBuilder {
           continue;
         }
 
-        const lang = extname(absPath).slice(1); // 'java' or 'xtend'
+        const lang = extname(absPath).slice(1);
         const lineCount = content.split('\n').length;
 
-        // Parse
+        // Parse — try Java extractor first, fall back to JS parser
         let parsed;
-        if (lang === 'java') {
-          parsed = parseJava(content, relPath);
-        } else if (lang === 'xtend') {
-          parsed = parseXtend(content, relPath);
-        } else {
-          report.skipped++;
-          continue;
+        if (lang === 'java' || lang === 'xtend') {
+          parsed = await runExtractor(absPath, lang);
+        }
+        if (!parsed) {
+          if (lang === 'java') {
+            parsed = parseJava(content, relPath);
+          } else if (lang === 'xtend') {
+            parsed = parseXtend(content, relPath);
+          } else {
+            report.skipped++;
+            continue;
+          }
         }
 
-        // Persist in a transaction
-        this.db.transaction(() => {
-          const { id: fileId } = this.db.upsertFile({
-            path: relPath,
-            absPath,
-            lang,
-            sha256: hash,
-            lineCount,
-          });
+        // Delegate all DB writes to ir-ingest.js
+        const result = ingest.ingest(parsed, { filePath: relPath, absPath, lang, sha256: hash, lineCount });
 
-          // Record any parse errors
-          for (const err of parsed.errors) {
-            this.db.markFileError(relPath, err.message);
-            report.errors++;
-          }
+        // Record parse errors
+        for (const err of parsed.errors) {
+          try { this.db.markFileError(relPath, err.message); } catch (_) {}
+        }
 
-          // Persist imports as dependencies
-          for (const imp of parsed.imports) {
-            this.db.insertDependency({
-              fromFileId: fileId,
-              toQualified: imp.name,
-              toFileId: null,
-              depType: 'import',
-            });
-          }
-
-          // Persist classes
-          for (const cls of parsed.classes) {
-            const classId = this.db.insertClass({
-              ...cls,
-              fileId,
-              packageName: parsed.packageName,
-            });
-            report.classes++;
-
-            // Fields
-            for (const field of cls.fields ?? []) {
-              this.db.insertField({ ...field, classId });
-            }
-
-            // Methods
-            for (const method of cls.methods ?? []) {
-              const methodId = this.db.insertMethod({
-                ...method,
-                classId,
-                fileId,
-              });
-              report.methods++;
-
-              // CFG nodes
-              const nodeIdMap = new Map(); // local id → DB id
-              for (const node of method.cfgNodes ?? []) {
-                const dbId = this.db.insertCfgNode({ ...node, methodId });
-                nodeIdMap.set(node.id, dbId);
-              }
-
-              // CFG edges (remap node ids)
-              for (const edge of method.cfgEdges ?? []) {
-                const fromId = nodeIdMap.get(edge.fromNode);
-                const toId = nodeIdMap.get(edge.toNode);
-                if (fromId && toId) {
-                  this.db.insertCfgEdge({
-                    methodId,
-                    fromNode: fromId,
-                    toNode: toId,
-                    edgeType: edge.edgeType,
-                    condition: edge.condition,
-                  });
-                }
-              }
-
-              // Call sites
-              for (const call of method.callSites ?? []) {
-                this.db.insertCallEdge({
-                  callerId: methodId,
-                  calleeName: call.calleeName,
-                  calleeId: null,
-                  callType: 'method',
-                  line: call.line,
-                });
-              }
-
-              // Decisions and atomic conditions
-              for (const dec of method.decisions ?? []) {
-                const seq = method.decisions.indexOf(dec) + 1;
-                const decisionUid = `D-${String(methodId).padStart(4, '0')}-${String(seq).padStart(3, '0')}`;
-                const decisionId = this.db.insertDecision({
-                  methodId,
-                  decisionUid,
-                  kind: dec.kind,
-                  expression: dec.expression,
-                  normalized: dec.normalized,
-                  operator: dec.operator,
-                  lineStart: dec.line_start,
-                  branchCount: dec.branch_count,
-                  mcdcRequired: dec.mcdc_required ? 1 : 0,
-                  parseStatus: dec.parse_status ?? 'ok',
-                });
-
-                for (const cond of dec.conditions ?? []) {
-                  const condUid = `C-${String(decisionId)}-${String(cond.position)}`;
-                  this.db.insertCondition({
-                    decisionId,
-                    conditionUid: condUid,
-                    text: cond.text ?? '',
-                    normalizedText: cond.normalized ?? null,
-                    position: cond.position ?? 1,
-                    conditionType: cond.condition_type ?? 'atomic',
-                    parseStatus: cond.parse_status ?? 'ok',
-                  });
-                }
-              }
-
-              // MC/DC conditions
-              for (const cond of method.mcdcConditions ?? []) {
-                this.db.insertMcdcCondition({
-                  methodId,
-                  expression: cond.expression,
-                  subConditions: cond.subConditions,
-                  truthTable: cond.truthTable,
-                  mcdcPairs: cond.mcdcPairs,
-                });
-              }
-            }
-          }
-        });
-
-        report.parsed++;
+        report.parsed += result.fileId ? 1 : 0;
+        report.classes += result.classCount;
+        report.methods += result.methodCount;
+        report.errors += result.errors.length;
 
       } catch (err) {
         report.errors++;
@@ -249,75 +142,9 @@ export class GraphBuilder {
     else if (lang === 'xtend') parsed = parseXtend(content, relPath);
     else return { skipped: true };
 
-    let classCount = 0, methodCount = 0, errorCount = parsed.errors.length;
+    const ingest = new IrIngest(this.db);
+    const result = ingest.ingest(parsed, { filePath: relPath, absPath, lang, sha256: hash, lineCount });
 
-    this.db.transaction(() => {
-      const { id: fileId } = this.db.upsertFile({ path: relPath, absPath, lang, sha256: hash, lineCount });
-
-      for (const imp of parsed.imports) {
-        this.db.insertDependency({ fromFileId: fileId, toQualified: imp.name, toFileId: null, depType: 'import' });
-      }
-
-      for (const cls of parsed.classes) {
-        const classId = this.db.insertClass({ ...cls, fileId, packageName: parsed.packageName });
-        classCount++;
-
-        for (const field of cls.fields ?? []) this.db.insertField({ ...field, classId });
-
-        for (const method of cls.methods ?? []) {
-          const methodId = this.db.insertMethod({ ...method, classId, fileId });
-          methodCount++;
-
-          const nodeIdMap = new Map();
-          for (const node of method.cfgNodes ?? []) {
-            nodeIdMap.set(node.id, this.db.insertCfgNode({ ...node, methodId }));
-          }
-          for (const edge of method.cfgEdges ?? []) {
-            const f = nodeIdMap.get(edge.fromNode), t = nodeIdMap.get(edge.toNode);
-            if (f && t) this.db.insertCfgEdge({ methodId, fromNode: f, toNode: t, edgeType: edge.edgeType, condition: edge.condition });
-          }
-          for (const call of method.callSites ?? []) {
-            this.db.insertCallEdge({ callerId: methodId, calleeName: call.calleeName, calleeId: null, callType: 'method', line: call.line });
-          }
-
-          // Decisions and atomic conditions
-          for (const dec of method.decisions ?? []) {
-            const seq = method.decisions.indexOf(dec) + 1;
-            const decisionUid = `D-${String(methodId).padStart(4, '0')}-${String(seq).padStart(3, '0')}`;
-            const decisionId = this.db.insertDecision({
-              methodId,
-              decisionUid,
-              kind: dec.kind,
-              expression: dec.expression,
-              normalized: dec.normalized,
-              operator: dec.operator,
-              lineStart: dec.line_start,
-              branchCount: dec.branch_count,
-              mcdcRequired: dec.mcdc_required ? 1 : 0,
-              parseStatus: dec.parse_status ?? 'ok',
-            });
-
-            for (const cond of dec.conditions ?? []) {
-              const condUid = `C-${String(decisionId)}-${String(cond.position)}`;
-              this.db.insertCondition({
-                decisionId,
-                conditionUid: condUid,
-                text: cond.text ?? '',
-                normalizedText: cond.normalized ?? null,
-                position: cond.position ?? 1,
-                conditionType: cond.condition_type ?? 'atomic',
-                parseStatus: cond.parse_status ?? 'ok',
-              });
-            }
-          }
-
-          for (const cond of method.mcdcConditions ?? []) {
-            this.db.insertMcdcCondition({ methodId, expression: cond.expression, subConditions: cond.subConditions, truthTable: cond.truthTable, mcdcPairs: cond.mcdcPairs });
-          }
-        }
-      }
-    });
-
-    return { relPath, classCount, methodCount, errorCount };
+    return { relPath, classCount: result.classCount, methodCount: result.methodCount, errorCount: result.errors.length };
   }
 }

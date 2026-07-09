@@ -358,32 +358,6 @@ export class GraphDatabase {
     }).lastInsertRowid;
   }
 
-  // ── MC/DC Pairs (normalized) ──────────────────────────────
-
-  insertMcdcPair(pair) {
-    return this.db.prepare(`
-      INSERT INTO mcdc_pairs
-        (decision_id, condition_id, pair_uid, test_vector_a_json, test_vector_b_json,
-         outcome_a, outcome_b, independence_status, review_status, reviewer, reviewed_at, notes)
-      VALUES
-        (@decisionId, @conditionId, @pairUid, @testVectorAJson, @testVectorBJson,
-         @outcomeA, @outcomeB, @independenceStatus, @reviewStatus, @reviewer, @reviewedAt, @notes)
-    `).run({
-      decisionId: pair.decisionId,
-      conditionId: pair.conditionId,
-      pairUid: pair.pairUid,
-      testVectorAJson: JSON.stringify(pair.testVectorA),
-      testVectorBJson: JSON.stringify(pair.testVectorB),
-      outcomeA: pair.outcomeA,
-      outcomeB: pair.outcomeB,
-      independenceStatus: pair.independenceStatus ?? 'draft',
-      reviewStatus: pair.reviewStatus ?? 'draft',
-      reviewer: pair.reviewer ?? null,
-      reviewedAt: pair.reviewedAt ?? null,
-      notes: pair.notes ?? null,
-    }).lastInsertRowid;
-  }
-
   getMcdcPairsForDecision(decisionId) {
     const rows = this.db.prepare(
       'SELECT * FROM mcdc_pairs WHERE decision_id = ? ORDER BY id'
