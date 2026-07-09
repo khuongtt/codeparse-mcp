@@ -118,7 +118,7 @@
         {
           "name": "isInRange",
           "signature": "isInRange(int,int,int):boolean",
-          "cyclomaticComplexity": 1,
+          "cyclomaticComplexity": 2,
           "branchCount": 2,
           "conditionCount": 2,
           "decisions": [
@@ -338,9 +338,9 @@
         {
           "name": "sign",
           "signature": "sign(int):int",
-          "cyclomaticComplexity": 1,
-          "branchCount": 2,
-          "conditionCount": 1,
+          "cyclomaticComplexity": 3,
+          "branchCount": 4,
+          "conditionCount": 2,
           "decisions": [
             {
               "kind": "ternary",
@@ -360,13 +360,33 @@
                 }
               ],
               "parseStatus": "ok"
+            },
+            {
+              "kind": "ternary",
+              "expression": "(x < 0)",
+              "normalized": "(x < 0)",
+              "operator": null,
+              "lineStart": 2,
+              "branchCount": 2,
+              "mcdcRequired": false,
+              "conditions": [
+                {
+                  "text": "x < 0",
+                  "normalizedText": "x < 0",
+                  "position": 1,
+                  "conditionType": "atomic",
+                  "parseStatus": "ok"
+                }
+              ],
+              "parseStatus": "ok"
             }
           ],
           "booleanConditions": [
-            "(x > 0)"
+            "(x > 0)",
+            "(x < 0)"
           ],
-          "cfgNodeCount": 5,
-          "cfgEdgeCount": 5,
+          "cfgNodeCount": 7,
+          "cfgEdgeCount": 8,
           "callSiteCount": 1,
           "mcdcConditionCount": 0
         },

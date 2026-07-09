@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO meta VALUES ('schema_version', '3');
+INSERT OR IGNORE INTO meta VALUES ('schema_version', '4');
 INSERT OR IGNORE INTO meta VALUES ('created_at', datetime('now'));
 
 -- ---- FILES ----
@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS cfg_nodes (
   label       TEXT,                             -- short description / expression text
   line        INTEGER,
   condition   TEXT,                             -- boolean expression for BRANCH/LOOP nodes
+  exception_type TEXT,                          -- for CATCH/THROW nodes: exception class name
   order_idx   INTEGER NOT NULL DEFAULT 0       -- ordering within method
 );
 
@@ -117,6 +118,17 @@ CREATE TABLE IF NOT EXISTS fields (
   is_final    INTEGER NOT NULL DEFAULT 0,
   annotations TEXT,
   initial_value TEXT,
+  line        INTEGER
+);
+
+-- ---- FIELD ACCESSES ----
+-- Per-method field read/write tracking for mock/state setup
+CREATE TABLE IF NOT EXISTS field_accesses (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  method_id   INTEGER NOT NULL REFERENCES methods(id) ON DELETE CASCADE,
+  field_id    INTEGER REFERENCES fields(id) ON DELETE SET NULL,
+  field_name  TEXT NOT NULL,
+  access_type TEXT NOT NULL CHECK(access_type IN ('read','write')),
   line        INTEGER
 );
 
@@ -279,3 +291,4 @@ CREATE INDEX IF NOT EXISTS idx_test_cases_target    ON test_cases(target_method_
 CREATE INDEX IF NOT EXISTS idx_test_results_case    ON test_results(test_case_id);
 CREATE INDEX IF NOT EXISTS idx_coverage_method      ON coverage_records(method_id);
 CREATE INDEX IF NOT EXISTS idx_coverage_file        ON coverage_records(file_id);
+CREATE INDEX IF NOT EXISTS idx_field_accesses_method ON field_accesses(method_id);

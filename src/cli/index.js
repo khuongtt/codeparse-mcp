@@ -73,6 +73,7 @@ program
         DROP TABLE IF EXISTS call_edges;
         DROP TABLE IF EXISTS cfg_edges;
         DROP TABLE IF EXISTS cfg_nodes;
+        DROP TABLE IF EXISTS field_accesses;
         DROP TABLE IF EXISTS fields;
         DROP TABLE IF EXISTS dependencies;
         DROP TABLE IF EXISTS methods;

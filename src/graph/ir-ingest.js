@@ -7,7 +7,7 @@
 // between syncProject() and syncFile() in builder.js.
 
 import { validateIr } from '../ir/validate-ir.js';
-import { buildTruthTable, computeMcdcPairs } from '../parser/decision-utils.js';
+import { buildTruthTable, computeMcdcPairs, evalTree } from '../parser/decision-utils.js';
 
 export class IrIngest {
   /**
@@ -110,13 +110,29 @@ export class IrIngest {
     // CFG nodes
     const nodeIdMap = new Map();
     for (const node of method.cfg?.nodes ?? method.cfgNodes ?? []) {
-      const dbId = this.db.insertCfgNode({ methodId, ...node });
+      const dbId = this.db.insertCfgNode({
+        methodId,
+        nodeType: node.nodeType,
+        label: node.label ?? null,
+        line: node.line ?? null,
+        condition: node.condition ?? null,
+        exceptionType: node.exceptionType ?? null,
+        orderIdx: node.orderIdx ?? 0,
+      });
       nodeIdMap.set(node.id, dbId);
     }
     // Also accept flat cfgNodes/cfgEdges from fallback parsers
     for (const node of method.cfgNodes ?? []) {
       if (!nodeIdMap.has(node.id)) {
-        const dbId = this.db.insertCfgNode({ methodId, ...node });
+        const dbId = this.db.insertCfgNode({
+          methodId,
+          nodeType: node.nodeType,
+          label: node.label ?? null,
+          line: node.line ?? null,
+          condition: node.condition ?? null,
+          exceptionType: node.exceptionType ?? null,
+          orderIdx: node.orderIdx ?? 0,
+        });
         nodeIdMap.set(node.id, dbId);
       }
     }
@@ -139,6 +155,16 @@ export class IrIngest {
         calleeId: null,
         callType: 'method',
         line: call.line,
+      });
+    }
+
+    // Field accesses
+    for (const fa of method.fieldAccesses ?? []) {
+      this.db.insertFieldAccess({
+        methodId,
+        fieldName: fa.fieldName,
+        accessType: fa.accessType,
+        line: fa.line ?? null,
       });
     }
 
@@ -180,7 +206,7 @@ export class IrIngest {
         const subConds = dec.conditions.map(c => c.normalizedText || c.text);
         const tt = buildTruthTable(subConds);
         // Pass operator so computeMcdcPairs only returns pairs with opposite outcomes
-        const pairs = computeMcdcPairs(subConds, tt, dec.operator ?? null);
+        const pairs = computeMcdcPairs(subConds, tt, dec.operator ?? null, dec.tree ?? null);
 
         // Store in mcdc_conditions (backward compat)
         this.db.insertMcdcCondition({
@@ -204,8 +230,8 @@ export class IrIngest {
 
             const rowA = tt[pair.rowA];
             const rowB = tt[pair.rowB];
-            const outcomeA = this._evaluateOutcome(rowA, dec.operator);
-            const outcomeB = this._evaluateOutcome(rowB, dec.operator);
+            const outcomeA = this._evaluateOutcome(rowA, dec.operator, dec.tree);
+            const outcomeB = this._evaluateOutcome(rowB, dec.operator, dec.tree);
 
             const pairUid = `P-${String(decisionId).padStart(4, '0')}-${condPos}-${pi + 1}`;
             this.db.insertMcdcPair({
@@ -240,11 +266,15 @@ export class IrIngest {
    * Evaluate a truth table row outcome for a compound decision.
    * Uses operator heuristic: AND = all true, OR = any true, MIXED/null = first true.
    */
-  _evaluateOutcome(row, operator) {
+  _evaluateOutcome(row, operator, tree = null) {
+    if (operator === 'MIXED' && tree) {
+      // Use AST-based evaluation for MIXED expressions
+      return evalTree(tree, row) ? 1 : 0;
+    }
     const vals = Object.values(row);
     if (operator === 'AND') return vals.every(Boolean) ? 1 : 0;
     if (operator === 'OR') return vals.some(Boolean) ? 1 : 0;
-    // MIXED or null: use first condition
+    // MIXED without tree, or null: first condition decides
     return vals[0] ? 1 : 0;
   }
 }

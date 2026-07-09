@@ -239,7 +239,8 @@ class JavaVisitor {
     const throwsList = this._extractThrows(findFirst(header, 'throws'));
     const javadoc = this._findJavadoc(line);
     const body = findFirst(node, 'methodBody');
-    const cfgData = body ? analyzeBody(body) : emptyCfg();
+    const clsFields = this._currentClass()?.fields ?? [];
+    const cfgData = body ? analyzeBody(body, clsFields) : emptyCfg();
 
     const method = {
       name,
@@ -427,24 +428,27 @@ function emptyCfg() {
   };
 }
 
-function analyzeBody(bodyNode) {
-  const a = new BodyAnalyzer();
+function analyzeBody(bodyNode, classFields = []) {
+  const a = new BodyAnalyzer(classFields);
   a.analyze(bodyNode);
   return a.result();
 }
 
 class BodyAnalyzer {
-  constructor() {
+  constructor(classFields = []) {
     this._nodes = []; this._edges = []; this._calls = [];
     this._conds = []; this._mcdc = []; this._decisions = [];
     this._branches = 0; this._condCount = 0; this._cc = 1;
     this._idx = 0;
     this._cur = this._addNode('ENTRY', 'entry', null, null);
+    this._fieldAccesses = [];
+    this._classFields = classFields; // [{name, type}] for field name matching
+    this._localVars = new Set(); // track local variable declarations
   }
 
-  _addNode(type, label, line, cond) {
+  _addNode(type, label, line, cond, exceptionType) {
     const id = ++this._idx;
-    this._nodes.push({ id, nodeType: type, label, line, condition: cond, orderIdx: id });
+    this._nodes.push({ id, nodeType: type, label, line, condition: cond, exceptionType: exceptionType ?? null, orderIdx: id });
     return id;
   }
 
@@ -472,20 +476,33 @@ class BodyAnalyzer {
       case 'throwStatement': this._visitThrow(node); return;
       case 'statementExpression': this._visitStatementExpr(node); return;
       case 'conditionalExpression': this._visitConditionalExpr(node); return;
+      case 'localVariableDeclarationStatement': this._visitLocalVarDecl(node); return;
     }
     if (node.children) for (const arr of Object.values(node.children)) for (const c of arr) this._visitNode(c);
   }
 
-  _visitIf(node) {
+  _visitLocalVarDecl(node) {
+    const decl = findFirst(node, 'localVariableDeclaration');
+    if (!decl) return;
+    for (const vd of findAll(decl, 'variableDeclarator')) {
+      const name = vd.children?.variableDeclaratorId?.[0]?.children?.Identifier?.[0]?.image;
+      if (name) this._localVars.add(name);
+    }
+    // Still recurse into variable initializer for nested expressions
+    if (node.children) for (const arr of Object.values(node.children)) for (const c of arr) this._visitNode(c);
+  }
+
+  _visitIf(node, parentIsElseIf = false) {
     // children: If, LBrace, expression, RBrace, statement (then), [Else, statement (else)]
     const exprNode = node.children?.expression?.[0];
     const cond = exprNode ? allTokenImages(exprNode).join(' ').slice(0, 200) : '';
     const stmts = node.children?.statement ?? [];
 
     this._cc++;
-    this._registerDecision('if', cond, lineOf(node));
+    const kind = parentIsElseIf ? 'else_if' : 'if';
+    this._registerDecision(kind, cond, lineOf(node));
 
-    const branchId = this._addNode('BRANCH', `if (${cond})`, lineOf(node), cond);
+    const branchId = this._addNode('BRANCH', `${kind} (${cond})`, lineOf(node), cond);
     this._addEdge(this._cur, branchId);
 
     const mergeId = this._addNode('STATEMENT', 'merge', null, null);
@@ -497,8 +514,17 @@ class BodyAnalyzer {
 
     // false branch
     if (stmts[1]) { // else exists
+      // Check if else clause is just another ifStatement (else if)
+      const elseStmt = stmts[1];
+      const stmtChildren = elseStmt?.children?.statement ?? [];
+      const isElseIfChild = !!(stmtChildren[0] && stmtChildren[0].name === 'ifStatement');
+
       this._cur = branchId;
-      this._visitNode(stmts[1]);
+      if (isElseIfChild) {
+        this._visitIf(stmtChildren[0], true);
+      } else {
+        this._visitNode(stmts[1]);
+      }
       this._addEdge(this._cur, mergeId, 'false_branch', 'false');
     } else {
       this._addEdge(branchId, mergeId, 'false_branch', 'false');
@@ -612,9 +638,17 @@ class BodyAnalyzer {
     const mergeId = this._addNode('STATEMENT', 'try_merge', null, null);
     this._addEdge(this._cur, mergeId);
 
-    for (const c of node.children?.catchClause ?? []) {
+    const clauses = node.children?.catches?.[0]?.children?.catchClause ?? node.children?.catchClause ?? [];
+    for (const c of clauses) {
       this._cc++;
-      const catchId = this._addNode('CATCH', 'catch', lineOf(c), null);
+      // Extract exception type from catch clause
+      const catchType = findFirst(c, 'catchType');
+      let exceptionType = null;
+      if (catchType) {
+        const ct = findFirst(catchType, 'unannClassType');
+        if (ct) exceptionType = allTokenImages(ct).filter(t => !/^[.\s]+$/.test(t)).join('.');
+      }
+      const catchId = this._addNode('CATCH', 'catch', lineOf(c), null, exceptionType);
       this._addEdge(tryId, catchId, 'exception');
       this._cur = catchId;
       const cb = findFirst(c, 'block');
@@ -637,44 +671,96 @@ class BodyAnalyzer {
   }
 
   _visitThrow(node) {
-    const throwId = this._addNode('THROW', 'throw', lineOf(node), null);
+    // Extract exception type from throw expression
+    const exprNode = node.children?.expression?.[0];
+    let exceptionType = null;
+    if (exprNode) {
+      const toks = allTokenImages(exprNode);
+      // Find class name after 'new' keyword
+      const newIdx = toks.indexOf('new');
+      if (newIdx >= 0 && newIdx + 1 < toks.length) {
+        exceptionType = toks.slice(newIdx + 1).find(t => /^\w/.test(t) && !/^[a-z]/.test(t));
+      }
+    }
+    const throwId = this._addNode('THROW', 'throw', lineOf(node), null, exceptionType);
     this._addEdge(this._cur, throwId, 'exception');
     this._cur = throwId;
   }
 
   _visitStatementExpr(node) {
-    // Detect method calls
+    const allToks = allTokenImages(node);
+    const line = lineOf(node);
+
+    // Detect field write: varName = expr (not a local decl)
+    // Find assignment operator '='
+    const assignIdx = allToks.indexOf('=');
+    if (assignIdx > 0) {
+      const target = allToks[assignIdx - 1];
+      // Check if target is a known field (not local variable)
+      if (target && !this._localVars.has(target) && this._isLikelyField(target)) {
+        const isThisPrefix = allToks.slice(0, assignIdx).filter(t => t !== '.').join('.');
+        const fieldName = isThisPrefix.startsWith('this.') ? isThisPrefix.replace(/^this\./, '') : target;
+        this._fieldAccesses.push({ fieldName, accessType: 'write', line });
+      }
+    }
+
+    // Detect field read via this.field (skip assignment target — already registered as write)
+    const assignField = assignIdx > 0 ? allToks.slice(0, assignIdx).filter(t => t !== '.').join('.').replace(/^this\./, '') : null;
+    for (let i = 0; i < allToks.length - 1; i++) {
+      if (allToks[i] === 'this' && allToks[i + 1] === '.') {
+        let idx = i + 2;
+        while (idx < allToks.length && allToks[idx] === '.') idx++;
+        if (idx < allToks.length && idx > i + 2) continue; // compound this.foo.bar
+        if (idx < allToks.length && /^\w+$/.test(allToks[idx]) && !/^[A-Z]/.test(allToks[idx])) {
+          const fname = allToks[idx];
+          if (fname === assignField) continue; // skip assignment target
+          this._fieldAccesses.push({ fieldName: fname, accessType: 'read', line });
+        }
+      }
+    }
+
+    // Detect method calls (existing logic)
     const primaries = findAll(node, 'primary');
     for (const p of primaries) {
-      // Look for methodInvocationSuffix which indicates a call
       const miSuffix = findFirst(p, 'methodInvocationSuffix');
       if (miSuffix) {
         const prefix = findFirst(p, 'fqnOrRefType');
         const suffixes = p.children?.primarySuffix ?? [];
         const identifiers = [];
         if (prefix) {
-          // collect identifiers from fqnOrRefType
           for (const id of findAll(prefix, 'Identifier')) identifiers.push(id.image);
         }
-        // last primarySuffix with Identifier before methodInvocationSuffix
         for (const s of suffixes) {
           const id = s.children?.Identifier?.[0];
           if (id) identifiers.push(id.image);
         }
         const callee = identifiers.join('.');
         if (callee) {
-          this._calls.push({ calleeName: callee, line: lineOf(node) });
-          const callId = this._addNode('STATEMENT', `call: ${callee}`, lineOf(node), null);
+          this._calls.push({ calleeName: callee, line });
+          // Detect field read via prefix: obj.field.method()
+          if (identifiers.length >= 2 && !identifiers.includes('this')) {
+            const candidateField = identifiers[0];
+            if (this._isLikelyField(candidateField) && !this._localVars.has(candidateField)) {
+              this._fieldAccesses.push({ fieldName: candidateField, accessType: 'read', line });
+            }
+          }
+          const callId = this._addNode('STATEMENT', `call: ${callee}`, line, null);
           this._addEdge(this._cur, callId);
           this._cur = callId;
           return;
         }
       }
     }
+
     // Generic statement node
-    const stmtId = this._addNode('STATEMENT', 'stmt', lineOf(node), null);
+    const stmtId = this._addNode('STATEMENT', 'stmt', line, null);
     this._addEdge(this._cur, stmtId);
     this._cur = stmtId;
+  }
+
+  _isLikelyField(name) {
+    if (!name || /^[A-Z]/.test(name) || /^['"]/.test(name)) return false;
+    return this._classFields.some(f => f.name === name);
   }
 
   /**
@@ -747,6 +833,7 @@ class BodyAnalyzer {
       decisions: this._decisions,
       branchCount: this._branches, conditionCount: this._condCount,
       cyclomaticComplexity: this._cc, mcdcConditions: this._mcdc,
+      fieldAccesses: this._fieldAccesses,
     };
   }
 }

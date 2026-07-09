@@ -589,6 +589,7 @@ function analyzeXtendBody(bodyText) {
         ? condCandidate.slice(condEnd).trim()
         : condCandidate.trim();
       if (cond) {
+        cc++;
         registerDecision('ternary', cond, i + 1);
         const n = addNode('BRANCH', `ternary: ${cond}`, i + 1, cond);
         addEdge(prev, n);
@@ -596,8 +597,33 @@ function analyzeXtendBody(bodyText) {
         addEdge(n, merge, 'true_branch', 'true');
         addEdge(n, merge, 'false_branch', 'false');
         prev = merge;
-        continue;
       }
+
+      // Check for second/third ternary on same line (nested: cond ? a : b ? c : d)
+      // Find all '?' positions after the first match and extract condition from before ':'
+      let searchFrom = ternaryMatch.index + ternaryMatch[0].length;
+      while (searchFrom < line.length) {
+        const nextQ = line.indexOf('?', searchFrom);
+        if (nextQ === -1) break;
+        // Extract condition: look for last ':' before '?' then take text after it
+        const beforeQ = line.slice(0, nextQ);
+        const colonPos = beforeQ.lastIndexOf(':');
+        let cond2 = (colonPos >= 0 ? beforeQ.slice(colonPos + 1) : beforeQ).trim();
+        // Clean up leading parens (the condition might be wrapped: (x < 0))
+        cond2 = cond2.replace(/^[:\s]+/, '').trim();
+        if (cond2 && /[\w)]/.test(cond2) && cond2 !== 'else') {
+          cc++;
+          registerDecision('ternary', cond2, i + 1);
+          const n2 = addNode('BRANCH', `ternary: ${cond2}`, i + 1, cond2);
+          addEdge(prev, n2);
+          const merge2 = addNode('STATEMENT', 'ternary_merge', null, null);
+          addEdge(n2, merge2, 'true_branch', 'true');
+          addEdge(n2, merge2, 'false_branch', 'false');
+          prev = merge2;
+        }
+        searchFrom = nextQ + 1;
+      }
+      continue;
     }
 
     // switch

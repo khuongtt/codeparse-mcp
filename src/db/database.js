@@ -63,6 +63,29 @@ export class GraphDatabase {
         });
         process.stderr.write('[codeparse-mcp] Schema migrated v2 → v3 (evidence tables)\n');
       }
+      // v3 → v4: field_accesses table + exception_type column
+      if (version < 4) {
+        this.transaction(() => {
+          try {
+            this.db.exec("ALTER TABLE cfg_nodes ADD COLUMN exception_type TEXT");
+          } catch (_) { /* column may already exist */ }
+          try {
+            this.db.exec(`
+              CREATE TABLE IF NOT EXISTS field_accesses (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                method_id   INTEGER NOT NULL REFERENCES methods(id) ON DELETE CASCADE,
+                field_id    INTEGER REFERENCES fields(id) ON DELETE SET NULL,
+                field_name  TEXT NOT NULL,
+                access_type TEXT NOT NULL CHECK(access_type IN ('read','write')),
+                line        INTEGER
+              )
+            `);
+            this.db.exec("CREATE INDEX IF NOT EXISTS idx_field_accesses_method ON field_accesses(method_id)");
+          } catch (_) { /* table may already exist */ }
+          this.db.prepare("UPDATE meta SET value = '4' WHERE key = 'schema_version'").run();
+        });
+        process.stderr.write('[codeparse-mcp] Schema migrated v3 → v4 (field_accesses + exception_type)\n');
+      }
     } catch (_) {
       // Meta table may not exist yet on fresh schema — no migration needed
     }
@@ -190,14 +213,15 @@ export class GraphDatabase {
 
   insertCfgNode(node) {
     return this.db.prepare(`
-      INSERT INTO cfg_nodes (method_id, node_type, label, line, condition, order_idx)
-      VALUES (@methodId, @nodeType, @label, @line, @condition, @orderIdx)
+      INSERT INTO cfg_nodes (method_id, node_type, label, line, condition, exception_type, order_idx)
+      VALUES (@methodId, @nodeType, @label, @line, @condition, @exceptionType, @orderIdx)
     `).run({
       methodId: node.methodId,
       nodeType: node.nodeType,
       label: node.label ?? null,
       line: node.line ?? null,
       condition: node.condition ?? null,
+      exceptionType: node.exceptionType ?? null,
       orderIdx: node.orderIdx ?? 0,
     }).lastInsertRowid;
   }
@@ -249,6 +273,27 @@ export class GraphDatabase {
       initialValue: field.initialValue ?? null,
       line: field.line ?? null,
     }).lastInsertRowid;
+  }
+
+  // ── Field Accesses ──────────────────────────────────────
+
+  insertFieldAccess(fa) {
+    return this.db.prepare(`
+      INSERT INTO field_accesses (method_id, field_id, field_name, access_type, line)
+      VALUES (@methodId, @fieldId, @fieldName, @accessType, @line)
+    `).run({
+      methodId: fa.methodId,
+      fieldId: fa.fieldId ?? null,
+      fieldName: fa.fieldName,
+      accessType: fa.accessType,
+      line: fa.line ?? null,
+    }).lastInsertRowid;
+  }
+
+  getFieldAccessesForMethod(methodId) {
+    return this.db.prepare(
+      'SELECT * FROM field_accesses WHERE method_id = ? ORDER BY id'
+    ).all(methodId);
   }
 
   // ── Decisions / Conditions ──────────────────────────────

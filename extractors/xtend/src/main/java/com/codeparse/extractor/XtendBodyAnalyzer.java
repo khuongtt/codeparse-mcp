@@ -201,8 +201,25 @@ public class XtendBodyAnalyzer {
                     addEdge(n, merge, "true_branch", "true");
                     addEdge(n, merge, "false_branch", "false");
                     prev = merge;
-                    continue;
                 }
+
+                // Check for second ternary on same line (nested: cond ? a : b ? c : d)
+                String rest = line.substring(ternMatch.end());
+                Matcher secondTern = Pattern.compile("(\\w+(?:\\s*[<>!=]+\\s*\\w+)?)\\s*\\?\\s").matcher(rest);
+                if (secondTern.find()) {
+                    String cond2 = secondTern.group(1).trim();
+                    if (!cond2.isEmpty()) {
+                        cyclomaticComplexity++;
+                        registerDecision("ternary", cond2, i + 1);
+                        int n2 = addNode("BRANCH", "ternary: " + cond2, i + 1, cond2);
+                        addEdge(prev, n2, "sequential", null);
+                        int merge2 = addNode("STATEMENT", "ternary_merge", null, null);
+                        addEdge(n2, merge2, "true_branch", "true");
+                        addEdge(n2, merge2, "false_branch", "false");
+                        prev = merge2;
+                    }
+                }
+                continue;
             }
 
             // switch

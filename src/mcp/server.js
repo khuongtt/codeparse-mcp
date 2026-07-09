@@ -22,6 +22,8 @@ import {
   buildParseQuality,
   recommendedNextActions,
   estimateTokens,
+  truncateContext,
+  computeBoundaryHints,
   MAX_SOURCE_LINES_PER_METHOD,
   MAX_CONTEXT_TOKENS,
 } from './util.js';
@@ -372,6 +374,7 @@ async function handleTool(name, args) {
           DROP TABLE IF EXISTS packages;
           DROP TABLE IF EXISTS parse_errors;
           DROP TABLE IF EXISTS files;
+          DROP TABLE IF EXISTS field_accesses;
           DROP TABLE IF EXISTS meta;
         `);
         db._applySchema();
@@ -744,6 +747,9 @@ async function handleTool(name, args) {
         const decisions = db.getDecisionsForMethod(m.id);
         const callees = db.getCallees(m.id);
 
+        const fieldAccesses = db.getFieldAccessesForMethod(m.id);
+        const boundaryHints = computeBoundaryHints(decisions, m.parameters ? JSON.parse(m.parameters) : []);
+
         methodContexts.push({
           id: m.id,
           name: m.name,
@@ -764,6 +770,12 @@ async function handleTool(name, args) {
           condition_count: m.condition_count,
           decision_count: decisions.length,
           boolean_conditions: (m.boolean_conditions || []).map(decodeHtmlEntities),
+          field_accesses: fieldAccesses.map(fa => ({
+            field_name: fa.field_name,
+            access_type: fa.access_type,
+            line: fa.line,
+          })),
+          boundary_hints: boundaryHints,
           decisions: decisions.map(d => ({
             decision_uid: d.decision_uid,
             kind: d.kind,
@@ -948,20 +960,16 @@ async function handleTool(name, args) {
           }
         }
 
-        // Check token budget
+        // Check token budget with graduated truncation
         if (response.status === 'ok' || response.status === 'partial') {
-          const tokens = estimateTokens(response);
-          if (tokens > MAX_CONTEXT_TOKENS) {
-            // Remove expensive fields to fit budget
-            response.decisions = [];
+          truncateContext(response, MAX_CONTEXT_TOKENS);
+          if (response.contextBudget?.truncated) {
             response.status = 'partial';
-            response.truncated = true;
-            response.truncation_reason = 'TOKEN_BUDGET_EXCEEDED';
           }
         }
       }
 
-      // 2. Include fields
+      // 2. Include fields and field accesses
       if (args.include_fields !== false) {
         const classFields = db.db.prepare(
           'SELECT name, type, is_static, is_final FROM fields WHERE class_id = ? ORDER BY name'
@@ -972,6 +980,21 @@ async function handleTool(name, args) {
           is_static: !!f.is_static,
           is_final: !!f.is_final,
         }));
+
+        // Overlay actual per-method field accesses from field_accesses table
+        const fieldAccesses = db.getFieldAccessesForMethod(methodId);
+        if (fieldAccesses.length > 0) {
+          const reads = fieldAccesses.filter(fa => fa.access_type === 'read').map(fa => ({ name: fa.field_name, line: fa.line }));
+          const writes = fieldAccesses.filter(fa => fa.access_type === 'write').map(fa => ({ name: fa.field_name, line: fa.line }));
+          response.state.fields_read = classFields.filter(f => reads.some(r => r.name === f.name));
+          response.state.fields_written = writes;
+          // Add read fields not in class fields (e.g. inherited fields accessed via this.)
+          for (const r of reads) {
+            if (!response.state.fields_read.some(f => f.name === r.name)) {
+              response.state.fields_read.push({ name: r.name, line: r.line });
+            }
+          }
+        }
       }
 
       // 3. Include calls from this method

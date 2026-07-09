@@ -85,7 +85,7 @@ export class GraphBuilder {
         if (lang === 'java' || lang === 'xtend') {
           parsed = await runExtractor(absPath, lang);
         }
-        if (!parsed) {
+        if (!parsed || typeof parsed !== 'object' || !parsed.classes) {
           if (lang === 'java') {
             parsed = parseJava(content, relPath);
           } else if (lang === 'xtend') {
@@ -100,7 +100,7 @@ export class GraphBuilder {
         const result = ingest.ingest(parsed, { filePath: relPath, absPath, lang, sha256: hash, lineCount });
 
         // Record parse errors
-        for (const err of parsed.errors) {
+        for (const err of parsed.errors ?? []) {
           try { this.db.markFileError(relPath, err.message); } catch (_) {}
         }
 

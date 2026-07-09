@@ -7,7 +7,56 @@ import { resolve } from 'path';
 // ── Constants ────────────────────────────────────────────────────────────────────
 
 export const MAX_SOURCE_LINES_PER_METHOD = 300;
-export const MAX_CONTEXT_TOKENS = 1800;
+export const MAX_CONTEXT_TOKENS = 4000;
+
+// ── Context budget tracking ────────────────────────────────────────────────────
+
+/**
+ * Graduated context truncation for get_method_context response.
+ * Drops least-essential data first, then more, to fit token budget.
+ */
+export function truncateContext(response, maxTokens = MAX_CONTEXT_TOKENS) {
+  const budget = { max: maxTokens, used: estimateTokens(response), truncated: false, reason: null };
+  if (budget.used <= maxTokens) {
+    response.contextBudget = budget;
+    return response;
+  }
+
+  // Stage 1: drop source code
+  if (budget.used > maxTokens && response.method?.source) {
+    delete response.method.source;
+    budget.used = estimateTokens(response);
+    budget.truncated = true;
+    budget.reason = 'SOURCE_DROPPED';
+  }
+
+  // Stage 2: drop CFG nodes/edges
+  if (budget.used > maxTokens && response.cfg) {
+    delete response.cfg;
+    budget.used = estimateTokens(response);
+    budget.truncated = true;
+    budget.reason = budget.reason ? 'CFG_DROPPED' : 'SOURCE_AND_CFG_DROPPED';
+  }
+
+  // Stage 3: drop calls
+  if (budget.used > maxTokens && response.calls?.length > 0) {
+    response.calls = [];
+    budget.used = estimateTokens(response);
+    budget.truncated = true;
+    budget.reason = 'CALLS_DROPPED';
+  }
+
+  // Stage 4: drop decisions
+  if (budget.used > maxTokens && response.decisions?.length > 0) {
+    response.decisions = [];
+    budget.used = estimateTokens(response);
+    budget.truncated = true;
+    budget.reason = 'DECISIONS_DROPPED';
+  }
+
+  response.contextBudget = budget;
+  return response;
+}
 
 // ── HTML entity decoding ─────────────────────────────────────────────────────────
 
@@ -155,6 +204,68 @@ export function buildParseQuality(method) {
     status: warnings.length > 0 ? 'warning' : 'ok',
     warnings,
   };
+}
+
+// ── Boundary value hints ─────────────────────────────────────────────────────────
+
+/**
+ * Compute boundary value hints for method parameters based on comparison conditions.
+ * @param {object[]} decisions — array of decision objects with conditions
+ * @param {object[]} parameters — method parameters [{name, type}]
+ * @returns {object[]} — [{paramName, type, boundaries: [{expr, value, category}]}]
+ */
+export function computeBoundaryHints(decisions, parameters) {
+  const hints = [];
+  for (const param of parameters ?? []) {
+    const boundaries = [];
+    const paramName = param.name;
+    const paramType = param.type;
+    if (!paramName || /^(String|boolean|Boolean|List|Set|Map|void)/.test(paramType)) continue;
+
+    for (const dec of decisions ?? []) {
+      for (const cond of dec.conditions ?? []) {
+        const text = cond.text ?? '';
+        // Match patterns: paramName >= N, paramName > N, etc.
+        const patterns = [
+          { re: new RegExp(`\\b${paramName}\\s*>=\\s*(\\d+)`), cat: 'lower' },
+          { re: new RegExp(`\\b${paramName}\\s*>\\s*(\\d+)`), cat: 'lower_exclusive' },
+          { re: new RegExp(`\\b${paramName}\\s*<=\\s*(\\d+)`), cat: 'upper' },
+          { re: new RegExp(`\\b${paramName}\\s*<\\s*(\\d+)`), cat: 'upper_exclusive' },
+          { re: new RegExp(`\\b${paramName}\\s*==\\s*(\\d+)`), cat: 'equality' },
+          { re: new RegExp(`\\b${paramName}\\s*!=\\s*(\\d+)`), cat: 'inequality' },
+        ];
+        for (const { re, cat } of patterns) {
+          const m = text.match(re);
+          if (m) {
+            const val = parseInt(m[1], 10);
+            boundaries.push({ expr: m[0], value: val, category: cat });
+          }
+        }
+      }
+    }
+
+    if (boundaries.length > 0) {
+      const values = new Set();
+      for (const b of boundaries) {
+        values.add(b.value);
+        values.add(b.value - 1);
+        values.add(b.value + 1);
+      }
+      // Common integer extremes for testing
+      values.add(0);
+      values.add(-1);
+      values.add(2147483647);  // Integer.MAX_VALUE equivalent
+      values.add(-2147483648); // Integer.MIN_VALUE equivalent
+
+      hints.push({
+        paramName,
+        type: paramType,
+        boundaries: boundaries.sort((a, b) => a.value - b.value),
+        suggestedTestValues: [...values].filter(v => Number.isFinite(v)).sort((a, b) => a - b),
+      });
+    }
+  }
+  return hints;
 }
 
 // ── Recommended next actions ──────────────────────────────────────────────────────
