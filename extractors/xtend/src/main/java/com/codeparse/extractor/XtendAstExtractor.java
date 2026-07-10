@@ -16,6 +16,7 @@ import org.eclipse.xtext.common.types.JvmTypeReference;
 import org.eclipse.xtext.nodemodel.util.NodeModelUtils;
 import org.eclipse.xtext.nodemodel.INode;
 import org.eclipse.emf.ecore.resource.Resource;
+import org.eclipse.xtext.resource.XtextResource;
 import org.eclipse.xtext.resource.XtextResourceSet;
 import org.eclipse.xtext.xbase.XBlockExpression;
 import org.eclipse.xtext.xbase.XExpression;
@@ -55,12 +56,62 @@ public class XtendAstExtractor {
         String source = Files.readString(path);
         String[] lines = source.split("\n", -1);
 
+        // Always run regex fallback for body data (CFG, decisions, calls)
+        // Regex handler produces correct body analysis for all Xtend method styles
+        IrClasses.IrFile fallback = extractWithRegex(path, source, lines);
+
         try {
-            return extractWithXtext(path, source, lines);
+            IrClasses.IrFile ir = extractWithXtext(path, source, lines);
+            // Merge body data from regex fallback into Xtext metadata
+            mergeBodyData(ir, fallback);
+            return ir;
         } catch (Exception e) {
             System.err.println("[xtend-extractor] Xtext parse failed, falling back to regex: " + e.getMessage());
-            e.printStackTrace(System.err);
-            return extractWithRegex(path, source, lines);
+            return fallback;
+        }
+    }
+
+    /** Merge body analysis fields from fallback into Xtext-based IR. */
+    private void mergeBodyData(IrClasses.IrFile ir, IrClasses.IrFile fallback) {
+        // Build a map from qualifiedName -> method name -> IrMethod for fallback
+        Map<String, Map<String, IrClasses.IrMethod>> fbMap = new HashMap<>();
+        for (var cls : fallback.classes) {
+            Map<String, IrClasses.IrMethod> mm = new HashMap<>();
+            for (var m : cls.methods) mm.put(m.name, m);
+            fbMap.put(cls.qualifiedName, mm);
+        }
+
+        for (int ci = 0; ci < ir.classes.size(); ci++) {
+            var cls = ir.classes.get(ci);
+            Map<String, IrClasses.IrMethod> mm = fbMap.get(cls.qualifiedName);
+            if (mm == null) continue;
+
+            // Merge body data for methods Xtext found
+            for (var m : cls.methods) {
+                IrClasses.IrMethod fb = mm.get(m.name);
+                if (fb == null) continue;
+                boolean xtextEmpty = m.cyclomaticComplexity <= 1
+                    && (m.decisions == null || m.decisions.isEmpty());
+                boolean fbHasBody = fb.cyclomaticComplexity > 1
+                    || (fb.decisions != null && !fb.decisions.isEmpty());
+                if (xtextEmpty && fbHasBody) {
+                    m.cyclomaticComplexity = fb.cyclomaticComplexity;
+                    m.branchCount = fb.branchCount;
+                    m.conditionCount = fb.conditionCount;
+                    m.decisions = fb.decisions;
+                    m.calls = fb.calls;
+                    m.cfg = fb.cfg;
+                }
+            }
+
+            // Add methods Xtext missed (e.g., after RichString templates)
+            Set<String> existingNames = new HashSet<>();
+            for (var m : cls.methods) existingNames.add(m.name);
+            for (var fb : mm.values()) {
+                if (!existingNames.contains(fb.name)) {
+                    cls.methods.add(fb);
+                }
+            }
         }
     }
 
@@ -69,6 +120,9 @@ public class XtendAstExtractor {
     // ═══════════════════════════════════════════════════════════════════
 
     private IrClasses.IrFile extractWithXtext(Path path, String source, String[] lines) throws Exception {
+        // Ensure thread context classLoader for shaded JAR environment
+        Thread.currentThread().setContextClassLoader(getClass().getClassLoader());
+
         XtendStandaloneSetup setup = new XtendStandaloneSetup();
         Injector injector = setup.createInjectorAndDoEMFRegistration();
         XtextResourceSet rs = injector.getInstance(XtextResourceSet.class);
@@ -76,17 +130,37 @@ public class XtendAstExtractor {
 
         org.eclipse.emf.common.util.URI uri =
             org.eclipse.emf.common.util.URI.createFileURI(path.toString());
-        Resource resource = rs.getResource(uri, true);
-        if (resource == null || resource.getContents().isEmpty()) {
+        Resource resource = rs.createResource(uri);
+        if (resource == null) {
+            throw new RuntimeException("Xtext createResource returned null");
+        }
+        // Load without type resolution — we don't need JVM bindings,
+        // source fallback handles return/param types
+        Map<String, Object> loadOptions = new HashMap<>();
+        loadOptions.put(org.eclipse.xtext.resource.XtextResource.OPTION_RESOLVE_ALL, false);
+        try {
+            resource.load(loadOptions);
+        } catch (Exception e) {
+            throw new RuntimeException("Xtext resource load failed: " + e.getMessage());
+        }
+        if (resource.getContents().isEmpty()) {
             throw new RuntimeException("Xtext resource returned no content");
         }
+        // Log but don't abort on resolution errors (type link failures)
         if (resource.getErrors() != null && !resource.getErrors().isEmpty()) {
+            boolean hasFatal = false;
             StringBuilder sb = new StringBuilder();
             for (var err : resource.getErrors()) {
                 if (sb.length() > 0) sb.append("; ");
                 sb.append(err.getMessage());
+                String msg = err.getMessage();
+                if (msg != null && (msg.contains("No parser rule") || msg.contains("syntax error"))) {
+                    hasFatal = true;
+                }
             }
-            throw new RuntimeException("Xtext parse errors: " + sb);
+            if (hasFatal) {
+                throw new RuntimeException("Xtext parse errors: " + sb);
+            }
         }
 
         XtendFile xtendFile = (XtendFile) resource.getContents().get(0);
@@ -245,7 +319,10 @@ public class XtendAstExtractor {
 
             // Get body source lines using body expression's AST node
             INode bodyNode = NodeModelUtils.findActualNodeFor(bodyExpr);
-            if (bodyNode == null) { setEmptyResult(m); return; }
+            if (bodyNode == null) {
+                setEmptyResult(m);
+                return;
+            }
             int bodyStartLine = bodyNode.getStartLine();
             int bodyEndLine = bodyNode.getEndLine();
 
@@ -297,7 +374,7 @@ public class XtendAstExtractor {
 
         } catch (Exception e) {
             System.err.println("[xtend-extractor] body analysis error in " + m.name + ": " + e.getMessage());
-            setEmptyResult(m);
+            // mergeBodyData fills from regex fallback
         }
     }
 
