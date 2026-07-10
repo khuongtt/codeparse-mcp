@@ -33,6 +33,23 @@ export async function runExtractor(absPath, lang) {
     ? 'com.codeparse.extractor.JavaAstExtractor'
     : 'com.codeparse.extractor.XtendAstExtractor';
 
+  if (lang === 'xtend') {
+    // Xtend uses pre-built fat JAR
+    const xtendJar = resolve(EXTRACTOR_DIR, 'xtend', 'target', 'xtend-ast-extractor-1.0.0.jar');
+    if (!existsSync(xtendJar)) return null;
+    return new Promise((resolve) => {
+      execFile(
+        resolve(JDK_HOME, 'bin', 'java'),
+        ['-jar', xtendJar, absPath],
+        { timeout: 60000 },
+        (err, stdout, stderr) => {
+          if (err) { resolve(null); return; }
+          try { resolve(JSON.parse(stdout)); } catch (e) { resolve(null); }
+        }
+      );
+    });
+  }
+
   const classesDir = resolve(EXTRACTOR_DIR, langDir, 'target', 'classes');
 
   // Check if classes exist — extractor not available = silently fall back
