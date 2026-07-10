@@ -90,10 +90,13 @@ public class XtendAstExtractor {
             for (var m : cls.methods) {
                 IrClasses.IrMethod fb = mm.get(m.name);
                 if (fb == null) continue;
-                boolean xtextEmpty = m.cyclomaticComplexity <= 1
-                    && (m.decisions == null || m.decisions.isEmpty());
+                boolean xtextHasBody = (m.cfg != null && m.cfg.nodes != null && !m.cfg.nodes.isEmpty());
                 boolean fbHasBody = fb.cyclomaticComplexity > 1
-                    || (fb.decisions != null && !fb.decisions.isEmpty());
+                    || (fb.decisions != null && !fb.decisions.isEmpty())
+                    || (fb.cfg != null && fb.cfg.nodes != null && !fb.cfg.nodes.isEmpty());
+                boolean xtextEmpty = !xtextHasBody
+                    && m.cyclomaticComplexity <= 1
+                    && (m.decisions == null || m.decisions.isEmpty());
                 if (xtextEmpty && fbHasBody) {
                     m.cyclomaticComplexity = fb.cyclomaticComplexity;
                     m.branchCount = fb.branchCount;
@@ -749,7 +752,32 @@ public class XtendAstExtractor {
             ).matcher(raw);
             if (defMatch.find()) {
                 mp.name = defMatch.group(2); mp.returnType = defMatch.group(1) != null ? defMatch.group(1) : "void";
-                mp.signature = mp.name + "()" + (mp.returnType.equals("void") ? "" : ":" + mp.returnType);
+                String params = defMatch.group(3) != null ? defMatch.group(3).trim() : "";
+                // Parse param types — take each comma-separated part and extract type word
+                StringBuilder psb = new StringBuilder();
+                if (!params.isEmpty()) {
+                    for (String part : params.split(",")) {
+                        String p = part.trim();
+                        String[] words = p.split("\\s+");
+                        if (words.length > 0 && !words[0].equals("extension")) {
+                            if (psb.length() > 0) psb.append(",");
+                            psb.append(words[0]);
+                        }
+                    }
+                }
+                mp.signature = mp.name + "(" + psb + ")" + (mp.returnType.equals("void") ? "" : ":" + mp.returnType);
+                // Extract parameters for IrMethod.parameters list
+                if (!params.isEmpty()) {
+                    mp.parameters = new ArrayList<>();
+                    List<String> seenAnnotations = new ArrayList<>();
+                    for (String part : params.split(",")) {
+                        String p = part.trim();
+                        String[] words = p.split("\\s+");
+                        String type = words.length >= 2 ? words[0] : "void";
+                        String name = words.length >= 2 ? words[words.length - 1] : words[0];
+                        mp.parameters.add(Map.of("name", name, "type", type));
+                    }
+                }
                 currentMethod = mp; methods.add(mp); return;
             }
             mp.name = "unknown"; mp.signature = "unknown():void"; currentMethod = mp; methods.add(mp);
@@ -778,6 +806,7 @@ public class XtendAstExtractor {
                 m.branchCount = mp.analyzerBranchCount; m.conditionCount = mp.analyzerConditionCount;
                 m.cyclomaticComplexity = mp.analyzerCyclomaticComplexity;
                 m.calls = mp.analyzerCalls != null ? mp.analyzerCalls : new ArrayList<>();
+                if (mp.parameters != null) m.parameters = mp.parameters;
                 IrClasses.IrCfg cfg = new IrClasses.IrCfg();
                 cfg.nodes = mp.analyzerCfgNodes != null ? mp.analyzerCfgNodes : new ArrayList<>();
                 cfg.edges = mp.analyzerCfgEdges != null ? mp.analyzerCfgEdges : new ArrayList<>();
@@ -797,5 +826,6 @@ public class XtendAstExtractor {
         List<Map<String, Object>> analyzerCalls;
         int analyzerBranchCount, analyzerConditionCount, analyzerCyclomaticComplexity;
         List<Map<String, Object>> analyzerCfgNodes, analyzerCfgEdges;
+        List<Map<String, String>> parameters;
     }
 }
