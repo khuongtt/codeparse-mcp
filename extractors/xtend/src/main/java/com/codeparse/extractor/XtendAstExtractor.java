@@ -161,7 +161,7 @@ public class XtendAstExtractor {
 
         // Return type — try resolved type first, then fallback to source text
         m.returnType = typeRefName(function.getReturnType());
-        if ("void".equals(m.returnType) && lines.length > 0) {
+        if (m.returnType != null && m.returnType.startsWith("void") && lines.length > 0) {
             String srcType = extractReturnTypeFromSource(function, lines);
             if (srcType != null) m.returnType = srcType;
         }
@@ -170,7 +170,7 @@ public class XtendAstExtractor {
         List<String> sigParamTypes = new ArrayList<>();
         for (int pi = 0; pi < function.getParameters().size(); pi++) {
             String ptype = typeRefName(function.getParameters().get(pi).getParameterType());
-            if ("void".equals(ptype) && lines.length > 0) {
+            if (ptype != null && ptype.startsWith("void") && lines.length > 0) {
                 String srcType = extractParamTypeFromSource(function, pi, lines);
                 if (srcType != null) ptype = srcType;
             }
@@ -199,7 +199,7 @@ public class XtendAstExtractor {
             Map<String, String> pm = new HashMap<>();
             pm.put("name", param.getName());
             String ptype = typeRefName(param.getParameterType());
-            if ("void".equals(ptype) && lines.length > 0) {
+            if (ptype != null && ptype.startsWith("void") && lines.length > 0) {
                 String srcType = extractParamTypeFromSource(function, pi, lines);
                 if (srcType != null) ptype = srcType;
             }
@@ -322,9 +322,19 @@ public class XtendAstExtractor {
         }
     }
 
+    private String exprText(XExpression expr) {
+        if (expr == null) return "";
+        INode node = NodeModelUtils.findActualNodeFor(expr);
+        if (node != null) {
+            String t = node.getText();
+            if (t != null && !t.isBlank()) return t.trim();
+        }
+        return expr.toString().trim();
+    }
+
     private void walkRichStringIf(RichStringIf richIf, List<IrClasses.IrDecision> out, CfgBuilder cb) {
         // IF
-        String condition = richIf.getIf() != null ? richIf.getIf().toString().trim() : "";
+        String condition = exprText(richIf.getIf());
         int line = getLine(richIf);
         IrClasses.IrDecision ifDec = cb.createDecision("template_if", condition, line);
         if (ifDec != null) out.add(ifDec);
@@ -336,7 +346,7 @@ public class XtendAstExtractor {
 
         // ELSEIF
         for (RichStringElseIf elseIf : richIf.getElseIfs()) {
-            String elseIfCond = elseIf.getIf() != null ? elseIf.getIf().toString().trim() : "";
+            String elseIfCond = exprText(elseIf.getIf());
             int elseIfLine = getLine(elseIf);
             IrClasses.IrDecision elseIfDec = cb.createDecision("template_elseif", elseIfCond, elseIfLine);
             if (elseIfDec != null) out.add(elseIfDec);
@@ -353,11 +363,12 @@ public class XtendAstExtractor {
     }
 
     private void walkRichStringForLoop(RichStringForLoop forLoop, List<IrClasses.IrDecision> out, CfgBuilder cb) {
-        String iterable = forLoop.getForExpression() != null
-            ? forLoop.getForExpression().toString().trim()
-            : (forLoop.getDeclaredParam() != null ? forLoop.getDeclaredParam().toString().trim() : "");
+        String iterable = exprText(forLoop.getForExpression());
+        if (iterable.isBlank() && forLoop.getDeclaredParam() != null) {
+            iterable = forLoop.getDeclaredParam().toString().trim();
+        }
         int line = getLine(forLoop);
-        IrClasses.IrDecision dec = cb.createDecision("foreach", iterable, line);
+        IrClasses.IrDecision dec = cb.createDecision("template_foreach", iterable, line);
         if (dec != null) out.add(dec);
 
         // Recurse into loop body via getEachExpression()
@@ -464,8 +475,11 @@ public class XtendAstExtractor {
             if (tmplIf.find()) allTemplateMarkers.add(new TemplateMarker(i, "template_if", tmplIf.group(1)));
             Matcher tmplElseIf = Pattern.compile("^«ELSEIF\\s+(.+?)»").matcher(line);
             if (tmplElseIf.find()) allTemplateMarkers.add(new TemplateMarker(i, "template_elseif", tmplElseIf.group(1)));
+            Matcher tmplFor = Pattern.compile("^«FOR\\s+(.+?)»").matcher(line);
+            if (tmplFor.find()) allTemplateMarkers.add(new TemplateMarker(i, "template_foreach", tmplFor.group(1)));
             if (line.startsWith("«ELSE»")) allTemplateMarkers.add(new TemplateMarker(i, "template_else", null));
             if (line.startsWith("«ENDIF»")) allTemplateMarkers.add(new TemplateMarker(i, "template_endif", null));
+            if (line.startsWith("«ENDFOR»")) allTemplateMarkers.add(new TemplateMarker(i, "template_endfor", null));
         }
 
         ClassParseState currentClass = null;
@@ -563,7 +577,7 @@ public class XtendAstExtractor {
             for (TemplateMarker tm : cls.templateMarkers) {
                 int tmLine = tm.line + 1;
                 if (tmLine >= mp.declaredOnLine + 1 && tmLine <= mp.bodyEndLine + 1) {
-                    if ("template_if".equals(tm.kind) || "template_elseif".equals(tm.kind)) {
+                    if ("template_if".equals(tm.kind) || "template_elseif".equals(tm.kind) || "template_foreach".equals(tm.kind)) {
                         if (mp.templateDecisions == null) mp.templateDecisions = new ArrayList<>();
                         mp.templateDecisions.add(tm);
                     }
@@ -586,6 +600,19 @@ public class XtendAstExtractor {
                         TemplateMarker tm = mp.templateDecisions.get(markerIdx);
                         if (d.kind.equals("if") && tm.kind.equals("template_if")) { d.kind = "template_if"; markerIdx++; }
                         else if (d.kind.equals("else_if") && tm.kind.equals("template_elseif")) { d.kind = "template_elseif"; markerIdx++; }
+                    }
+                    // template_foreach markers that weren't matched to CFG decisions → add separately
+                    for (TemplateMarker tm : mp.templateDecisions) {
+                        if ("template_foreach".equals(tm.kind)) {
+                            boolean alreadyAdded = false;
+                            for (IrClasses.IrDecision d : cfgBuilder.decisions) {
+                                if ("template_foreach".equals(d.kind)) { alreadyAdded = true; break; }
+                            }
+                            if (!alreadyAdded) {
+                                IrClasses.IrDecision dec = cfgBuilder.createDecision("template_foreach", tm.expression, tm.line + 1);
+                                if (dec != null) cfgBuilder.decisions.add(0, dec);
+                            }
+                        }
                     }
                 }
 

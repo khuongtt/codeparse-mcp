@@ -87,8 +87,12 @@ public class XtendPreprocessor {
             if ("IF".equals(m.group(1))) return indentLine(raw, "if (" + m.group(2) + ") {");
             return indentLine(raw, "} else if (" + m.group(2) + ") {");
         }
+        Matcher f = Pattern.compile("^«FOR\\s+(.+?)»").matcher(trimmed);
+        if (f.find()) {
+            return indentLine(raw, "for (Object " + f.group(1) + ") {");
+        }
         if (trimmed.startsWith("«ELSE»")) return indentLine(raw, "} else {");
-        if (trimmed.startsWith("«ENDIF»")) return indentLine(raw, "}");
+        if (trimmed.startsWith("«ENDIF»") || trimmed.startsWith("«ENDFOR»")) return indentLine(raw, "}");
         if (trimmed.contains("«") && trimmed.contains("»")) return indentLine(raw, "/* template */ ;");
         return null;
     }
