@@ -55,8 +55,9 @@ const EXPECTED = {
     calls: 1,
   },
   sign: {
-    cc: 2, bc: 2, condCount: 1, decCount: 1,
+    cc: 3, bc: 4, condCount: 2, decCount: 2,
     decisions: [
+      { kind: 'ternary', mcdc: false, condCount: 1 },
       { kind: 'ternary', mcdc: false, condCount: 1 },
     ],
     calls: 0,

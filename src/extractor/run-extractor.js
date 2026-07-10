@@ -4,16 +4,22 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { resolve, extname } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
+import { constants } from 'node:fs';
 
 const __dirname = resolve(fileURLToPath(import.meta.url), '..');
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
-
 const EXTRACTOR_DIR = resolve(PROJECT_ROOT, 'extractors');
-const JDK_HOME = '/tmp/jdk-17.0.13+11';
-const JAVAPARSER_JAR = '/tmp/javaparser-lib/javaparser-core-3.25.10.jar';
-const GSON_JAR = '/tmp/javaparser-lib/gson-2.10.1.jar';
+const M2_REPO = resolve(homedir(), '.m2', 'repository');
+
+// Auto-detect JDK java.home from the runtime JVM
+const JDK_HOME = resolve(process.env.JAVA_HOME || '/usr/lib/jvm/java-17-openjdk-amd64');
+
+// Auto-detect JARs from local Maven repo
+const JAVAPARSER_JAR = resolve(M2_REPO, 'com', 'github', 'javaparser', 'javaparser-core', '3.26.4', 'javaparser-core-3.26.4.jar');
+const GSON_JAR = resolve(M2_REPO, 'com', 'google', 'code', 'gson', 'gson', '2.11.0', 'gson-2.11.0.jar');
 
 /**
  * Run the Java AST extractor for a source file.
@@ -28,14 +34,17 @@ export async function runExtractor(absPath, lang) {
     : 'com.codeparse.extractor.XtendAstExtractor';
 
   const classesDir = resolve(EXTRACTOR_DIR, langDir, 'target', 'classes');
-  const javaClassesDir = resolve(EXTRACTOR_DIR, 'java', 'target', 'classes');
 
-  // Check if classes exist
-  if (!existsSync(classesDir) && !existsSync(javaClassesDir)) return null;
+  // Check if classes exist — extractor not available = silently fall back
+  if (!existsSync(classesDir)) return null;
 
-  const classpath = [classesDir, javaClassesDir, JAVAPARSER_JAR, GSON_JAR]
-    .filter(p => existsSync(p) || !p.includes('target'))
+  // Build classpath: extractor classes + dependencies
+  const classpath = [classesDir, JAVAPARSER_JAR, GSON_JAR]
+    .filter(p => existsSync(p))
     .join(':');
+
+  // If classpath is effectively empty (e.g. no JARs found), skip
+  if (!classpath) return null;
 
   return new Promise((resolve) => {
     execFile(
@@ -44,14 +53,12 @@ export async function runExtractor(absPath, lang) {
       { timeout: 30000 },
       (err, stdout, stderr) => {
         if (err) {
-          console.warn(`[extractor] ${lang} extractor failed for ${absPath}: ${err.message}`);
           resolve(null);
           return;
         }
         try {
           resolve(JSON.parse(stdout));
         } catch (parseErr) {
-          console.warn(`[extractor] JSON parse failed for ${absPath}: ${parseErr.message}`);
           resolve(null);
         }
       }

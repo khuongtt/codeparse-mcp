@@ -79,6 +79,22 @@ function firstToken(node) {
 
 function lineOf(node) { return firstToken(node)?.startLine ?? null; }
 
+function lastLineOf(node) {
+  if (!node || typeof node !== 'object') return null;
+  if (node.image !== undefined) return node.endLine ?? null;
+  if (node.children) {
+    const keys = Object.keys(node.children);
+    for (let k = keys.length - 1; k >= 0; k--) {
+      const arr = node.children[keys[k]];
+      for (let i = arr.length - 1; i >= 0; i--) {
+        const t = lastLineOf(arr[i]);
+        if (t !== null && t !== undefined) return t;
+      }
+    }
+  }
+  return null;
+}
+
 // ── HTML entity decoder (inline to avoid cross-dependency during parsing) ──
 
 function decodeHtmlEntities(text) {
@@ -182,7 +198,7 @@ class JavaVisitor {
       isAbstract: modifiers.includes('abstract'),
       visibility: this._visibility(modifiers),
       annotations, javadoc, superclass, interfaces,
-      lineStart: line, lineEnd: null,
+      lineStart: line, lineEnd: ncd ? lastLineOf(ncd) : null,
       asilLevel: this._detectAsil(annotations, javadoc),
       methods: [], fields: [], nestedClasses: [],
     };
@@ -212,7 +228,7 @@ class JavaVisitor {
       name, qualifiedName, packageName: this.packageName,
       kind, isAbstract: false, visibility: this._visibility(modifiers),
       annotations, javadoc, superclass: null, interfaces: [],
-      lineStart: line, lineEnd: null,
+      lineStart: line, lineEnd: lastLineOf(node),
       asilLevel: this._detectAsil(annotations, javadoc),
       methods: [], fields: [], nestedClasses: [],
     };
@@ -252,7 +268,7 @@ class JavaVisitor {
       isOverride: annotations.includes('Override'),
       annotations, params: params, parameters: params,
       throwsList, javadoc,
-      lineStart: line, lineEnd: null,
+      lineStart: line, lineEnd: lastLineOf(node),
       asilLevel: this._detectAsil(annotations, javadoc),
       ...cfgData,
     };
@@ -283,7 +299,7 @@ class JavaVisitor {
       isStatic: false, isAbstract: false,
       isOverride: false,
       annotations, parameters: params, throwsList, javadoc,
-      lineStart: line, lineEnd: null,
+      lineStart: line, lineEnd: lastLineOf(node),
       asilLevel: this._detectAsil(annotations, javadoc),
       ...cfgData,
     });

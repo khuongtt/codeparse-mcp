@@ -117,11 +117,14 @@ class XtendParser {
         continue;
       }
 
-      // Annotation line
+      // Annotation line — may share line with class/method (e.g. @Data class Foo, @Test def bar)
       const annMatch = line.match(/^@([\w.]+)/);
       if (annMatch) {
-        pendingAnnotations.push(annMatch[1]);
-        continue;
+        // Only accumulate standalone annotations; inline annotations extracted by declaration parser
+        if (!line.match(/(?:class|interface|enum|annotation)\s+\w+/) && !line.match(/\bdef\s+\w+\s*\(/)) {
+          pendingAnnotations.push(annMatch[1]);
+          continue;
+        }
       }
 
       // Class / interface / enum / annotation declaration
@@ -228,9 +231,11 @@ class XtendParser {
       // (handles 'def foo() {' where { bumps depth to 2 mid-line)
       if (depthBefore !== 1) continue;
 
-      // Annotation inside class
+      // Annotation inside class — may share line with method (e.g. @Test def bar())
       const annMatch = line.match(/^@([\w.]+)/);
-      if (annMatch) { pendingAnnotations.push(annMatch[1]); continue; }
+      if (annMatch) {
+        if (!line.match(/\bdef\s+\w+\s*\(/)) { pendingAnnotations.push(annMatch[1]); continue; }
+      }
 
       // Empty lines reset pending (if no annotations accumulating)
       if (line === '') {
@@ -273,15 +278,23 @@ class XtendParser {
   // ── Method parsing ────────────────────────────────────────────────────────
 
   _tryParseMethod(lineIdx, raw, line, annotations, javadoc, classQName) {
+    // Strip leading annotation prefix for regex matching (e.g. "@Test def foo()", "@Override void bar()")
+    const annPrefix = line.match(/^@\w+\s+/);
+    const methodLine = annPrefix ? line.slice(annPrefix[0].length) : line;
+
     // Xtend: def [override] [dispatch] [static] [returnType] methodName(...)
-    // Java-style: [modifiers] returnType methodName([params]) [throws ...]
-    const xtendDef = line.match(
+    const xtendDef = methodLine.match(
       /^((?:(?:override|dispatch|static|public|protected|private|final|abstract)\s+)*)def\s+((?:[\w<>\[\],? ]+?)\s+)?(\w+)\s*\(([^)]*)\)/
     );
-    const javaStyle = line.match(
+    // Xtend override/dispatch shorthand without 'def' keyword (e.g. "override handle(long now)")
+    const xtendShorthand = methodLine.match(
+      /^((?:(?:override|dispatch)\s+)+)((?:[\w<>\[\],? .]+\s+)?)(\w+)\s*\(([^)]*)\)/
+    );
+    // Java-style: [modifiers] returnType methodName([params]) [throws ...]
+    const javaStyle = methodLine.match(
       /^((?:(?:public|protected|private|static|final|abstract|synchronized|native)\s+)+)([\w<>\[\],? .]+?)\s+(\w+)\s*\(([^)]*)\)/
     );
-    const ctorStyle = line.match(
+    const ctorStyle = methodLine.match(
       /^(?:public|protected|private)?\s*(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,. ]+)?\s*\{/
     );
 
@@ -294,12 +307,31 @@ class XtendParser {
       returnType = (xtendDef[2] || 'void').trim() || 'void';
       name = xtendDef[3];
       paramStr = xtendDef[4];
+    } else if (xtendShorthand) {
+      isXtend = true;
+      modifiers = xtendShorthand[1].trim().split(/\s+/).filter(Boolean);
+      returnType = (xtendShorthand[2] || 'void').trim() || 'void';
+      name = xtendShorthand[3];
+      paramStr = xtendShorthand[4];
     } else if (javaStyle) {
       const modStr = (javaStyle[1] || '').trim();
       modifiers = modStr.split(/\s+/).filter(Boolean);
       returnType = javaStyle[2].trim();
       name = javaStyle[3];
       paramStr = javaStyle[4];
+    } else if (ctorStyle) {
+      // Xtend constructor: new(Params) { ... }
+      const ctorName = ctorStyle[1];
+      paramStr = ctorStyle[2];
+      if (ctorName === 'new') {
+        // Infer name from class
+        name = classQName ? classQName.split('.').pop() : ctorName;
+        returnType = name;
+      } else {
+        name = ctorName;
+        returnType = ctorName;
+      }
+      modifiers = [];
     } else {
       return null;
     }

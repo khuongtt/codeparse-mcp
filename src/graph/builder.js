@@ -137,6 +137,12 @@ export class GraphBuilder {
     const hash = sha256(content);
     const lineCount = content.split('\n').length;
 
+    // Always re-parse: cascade-delete existing data to avoid UNIQUE constraint
+    const existing = this.db.getFile(relPath);
+    if (existing) {
+      this.db.db.prepare('DELETE FROM files WHERE id = ?').run(existing.id);
+    }
+
     let parsed;
     if (lang === 'java') parsed = parseJava(content, relPath);
     else if (lang === 'xtend') parsed = parseXtend(content, relPath);
