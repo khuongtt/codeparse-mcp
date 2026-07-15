@@ -94,6 +94,15 @@ program
     };
 
     writeFileSync(join(root, '.codeparse.json'), JSON.stringify(config, null, 2));
+
+    // Generate module manifest
+    const builder = new GraphBuilder(db, root);
+    const mod = await builder.generateModuleFiles({ outputDir: join(root, '.codeparse') });
+    console.log(chalk.gray(`\n  📦 Module manifest: ${mod.moduleCount} module(s), ${mod.classCount} classes, ${mod.methodCount} methods`));
+    for (const m of mod.modules) {
+      console.log(chalk.gray(`     ${m.name}: ${m.fileCount} files → ${m.dir}`));
+    }
+
     db.close();
 
     console.log(chalk.green('\n  ✅ Initialized successfully.'));
@@ -162,6 +171,10 @@ program
     console.log(`  ${chalk.white('Methods found    :')} ${chalk.cyan(report.methods)}`);
     console.log(`  ${chalk.white('Call edges linked:')} ${chalk.gray(report.callEdgesResolved ?? 0)}`);
     console.log(`  ${chalk.white('Duration         :')} ${report.duration}ms`);
+
+    // Regenerate module manifest after sync
+    const mod = await builder.generateModuleFiles({ outputDir: join(config.projectRoot, '.codeparse') });
+    console.log(chalk.gray(`  📦 Module manifest: ${mod.moduleCount} module(s), ${mod.classCount} classes, ${mod.methodCount} methods`));
 
     if (report.errors > 0) {
       console.log(chalk.yellow('\n  ⚠  Some files had parse errors. Run: codeparse status'));
