@@ -2,7 +2,7 @@
 // Orchestrates parsing and writing graph data to SQLite.
 // After v3 refactor: scans files, dispatches parsers, delegates DB writes to ir-ingest.js.
 
-import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { relative, extname, resolve, join, basename, dirname } from 'path';
 import { globSync } from 'glob';
 import { GraphDatabase, sha256 } from '../db/database.js';
@@ -200,6 +200,10 @@ export class GraphBuilder {
 
     // Group by Maven module
     const mavenModules = this._detectMavenModules(allFiles);
+
+    // Wipe entire modules dir so stale files from prior runs are removed
+    const modulesBase = join(outputDir, 'modules');
+    if (existsSync(modulesBase)) rmSync(modulesBase, { recursive: true });
 
     mkdirSync(outputDir, { recursive: true });
 
