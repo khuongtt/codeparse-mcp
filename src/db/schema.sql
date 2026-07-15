@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO meta VALUES ('schema_version', '5');
+INSERT OR IGNORE INTO meta VALUES ('schema_version', '6');
 INSERT OR IGNORE INTO meta VALUES ('created_at', datetime('now'));
 
 -- ---- FILES ----
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS files (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   path        TEXT    NOT NULL UNIQUE,          -- relative to project root
   abs_path    TEXT    NOT NULL,
-  lang        TEXT    NOT NULL CHECK(lang IN ('java','xtend')),
+  lang        TEXT    NOT NULL CHECK(lang IN ('java','xtend','c','cpp')),
   sha256      TEXT    NOT NULL,                 -- content hash for change detection
   parsed_at   TEXT    NOT NULL DEFAULT (datetime('now')),
   line_count  INTEGER NOT NULL DEFAULT 0,
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS classes (
   package_id    INTEGER REFERENCES packages(id),
   name          TEXT    NOT NULL,
   qualified_name TEXT   NOT NULL UNIQUE,
-  kind          TEXT    NOT NULL CHECK(kind IN ('class','interface','enum','annotation','xtend_class')),
+  kind          TEXT    NOT NULL CHECK(kind IN ('class','interface','enum','annotation','xtend_class','c_struct','c_union','c_class')),
   is_abstract   INTEGER NOT NULL DEFAULT 0,
   superclass    TEXT,                           -- qualified name
   interfaces    TEXT,                           -- JSON array of qualified names

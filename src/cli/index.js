@@ -30,7 +30,7 @@ function loadConfig(projectRoot) {
   return {
     projectRoot: root,
     dbPath: join(root, '.codeparse', 'graph.db'),
-    include: ['**/*.java', '**/*.xtend'],
+    include: ['**/*.java', '**/*.xtend', '**/*.c', '**/*.cpp', '**/*.h', '**/*.hpp', '**/*.inl'],
     exclude: ['**/node_modules/**', '**/build/**', '**/target/**', '**/.gradle/**'],
   };
 }
@@ -89,7 +89,7 @@ program
     const config = {
       projectRoot: root,
       dbPath,
-      include: ['**/*.java', '**/*.xtend'],
+      include: ['**/*.java', '**/*.xtend', '**/*.c', '**/*.cpp', '**/*.h', '**/*.hpp', '**/*.inl'],
       exclude: ['**/node_modules/**', '**/build/**', '**/target/**', '**/.gradle/**'],
     };
 

@@ -14,7 +14,7 @@
     },
     "sourceLanguage": {
       "type": "string",
-      "enum": ["java", "xtend"],
+      "enum": ["java", "xtend", "c", "cpp"],
       "description": "Source language identifier"
     },
     "filePath": {
@@ -34,7 +34,7 @@
         "properties": {
           "name":              { "type": "string" },
           "qualifiedName":     { "type": "string" },
-          "kind":              { "type": "string", "enum": ["class", "interface", "enum", "annotation", "xtend_class"] },
+          "kind":              { "type": "string", "enum": ["class", "interface", "enum", "annotation", "xtend_class", "c_struct", "c_union", "c_class"] },
           "lineStart":         { "type": "integer", "minimum": 1 },
           "lineEnd":           { "type": ["integer", "null"] },
           "visibility":        { "type": "string", "enum": ["public", "protected", "private", "package"] },
@@ -108,7 +108,7 @@
         "kind": {
           "type": "string",
           "enum": ["if", "else_if", "template_if", "template_elseif", "ternary",
-                   "for", "foreach", "while", "do_while", "switch", "case", "catch"],
+                   "for", "foreach", "while", "do_while", "switch", "case", "catch", "c_function"],
           "description": "Decision kind — branch point type"
         },
         "expression":  { "type": "string", "description": "Full boolean expression text" },

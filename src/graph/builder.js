@@ -8,6 +8,7 @@ import { globSync } from 'glob';
 import { GraphDatabase, sha256 } from '../db/database.js';
 import { parseJava } from '../parser/java-parser.js';
 import { parseXtend } from '../parser/xtend-parser.js';
+import { parseC, parseCpp } from '../parser/cpp-parser.js';
 import { IrIngest } from './ir-ingest.js';
 import { runExtractor } from '../extractor/run-extractor.js';
 
@@ -29,7 +30,7 @@ export class GraphBuilder {
    */
   async syncProject(options = {}) {
     const {
-      include = ['**/*.java', '**/*.xtend'],
+      include = ['**/*.java', '**/*.xtend', '**/*.c', '**/*.cpp', '**/*.h', '**/*.hpp', '**/*.inl'],
       exclude = ['**/node_modules/**', '**/build/**', '**/target/**', '**/.gradle/**'],
       force = false,
       onProgress = null,
@@ -77,7 +78,8 @@ export class GraphBuilder {
           continue;
         }
 
-        const lang = extname(absPath).slice(1);
+        const rawLang = extname(absPath).slice(1);
+        const lang = rawLang === 'h' ? 'c' : rawLang === 'hpp' || rawLang === 'inl' ? 'cpp' : rawLang;
         const lineCount = content.split('\n').length;
 
         // Parse — try Java extractor first, fall back to JS parser
@@ -90,6 +92,10 @@ export class GraphBuilder {
             parsed = parseJava(content, relPath);
           } else if (lang === 'xtend') {
             parsed = parseXtend(content, relPath);
+          } else if (lang === 'c') {
+            parsed = parseC(content, relPath);
+          } else if (lang === 'cpp') {
+            parsed = parseCpp(content, relPath);
           } else {
             report.skipped++;
             continue;
@@ -186,7 +192,7 @@ export class GraphBuilder {
    */
   async generateModuleFiles(options = {}) {
     const {
-      include = ['**/*.java', '**/*.xtend'],
+      include = ['**/*.java', '**/*.xtend', '**/*.c', '**/*.cpp', '**/*.h', '**/*.hpp', '**/*.inl'],
       exclude = ['**/node_modules/**', '**/build/**', '**/target/**', '**/.gradle/**'],
       outputDir = join(this.projectRoot, '.codeparse'),
     } = options;
@@ -218,7 +224,8 @@ export class GraphBuilder {
 
       for (const absPath of mod.files) {
         const relPath = relative(this.projectRoot, absPath);
-        const lang = extname(absPath).slice(1);
+        const rawLang = extname(absPath).slice(1);
+        const lang = rawLang === 'h' ? 'c' : rawLang === 'hpp' || rawLang === 'inl' ? 'cpp' : rawLang;
         const content = readFileSync(absPath, 'utf8');
         const lineCount = content.split('\n').length;
         const base = basename(absPath, extname(absPath));
@@ -231,6 +238,8 @@ export class GraphBuilder {
           if (!parsed || typeof parsed !== 'object' || !parsed.classes) {
             if (lang === 'java') parsed = parseJava(content, relPath);
             else if (lang === 'xtend') parsed = parseXtend(content, relPath);
+            else if (lang === 'c') parsed = parseC(content, relPath);
+            else if (lang === 'cpp') parsed = parseCpp(content, relPath);
           }
         } catch (_) { /* skip unparseable files */ }
 
@@ -287,7 +296,8 @@ export class GraphBuilder {
 
   async syncFile(absPath) {
     const relPath = relative(this.projectRoot, absPath);
-    const lang = extname(absPath).slice(1);
+    const rawLang = extname(absPath).slice(1);
+    const lang = rawLang === 'h' ? 'c' : rawLang === 'hpp' || rawLang === 'inl' ? 'cpp' : rawLang;
     const content = readFileSync(absPath, 'utf8');
     const hash = sha256(content);
     const lineCount = content.split('\n').length;
@@ -301,6 +311,8 @@ export class GraphBuilder {
     let parsed;
     if (lang === 'java') parsed = parseJava(content, relPath);
     else if (lang === 'xtend') parsed = parseXtend(content, relPath);
+    else if (lang === 'c') parsed = parseC(content, relPath);
+    else if (lang === 'cpp') parsed = parseCpp(content, relPath);
     else return { skipped: true };
 
     const ingest = new IrIngest(this.db);

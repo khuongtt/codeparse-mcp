@@ -94,6 +94,11 @@ export class GraphDatabase {
         this.db.prepare("UPDATE meta SET value = '5' WHERE key = 'schema_version'").run();
         process.stderr.write('[codeparse-mcp] Schema migrated v4 → v5 (method asil_level)\n');
       }
+      // v5 → v6: C/C++ lang support — CHECK constraints updated in schema.sql
+      if (version < 6) {
+        this.db.prepare("UPDATE meta SET value = '6' WHERE key = 'schema_version'").run();
+        process.stderr.write('[codeparse-mcp] Schema migrated v5 → v6 (C/C++ lang support, re-apply full schema)\n');
+      }
     } catch (_) {
       // Meta table may not exist yet on fresh schema — no migration needed
     }
